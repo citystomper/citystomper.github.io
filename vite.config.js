@@ -2,8 +2,12 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
+const repoName = process.env.GITHUB_REPOSITORY?.split('/')[1]
+const base = process.env.VITE_BASE
+  ?? (repoName && repoName.endsWith('.github.io') ? '/' : repoName ? `/${repoName}/` : '/')
+
 export default defineConfig({
-  base: '/',
+  base,
   plugins: [
     react(),
     VitePWA({
