@@ -15,6 +15,7 @@ function bateman(t, ka, ke) {
   return (ka / (ka - ke)) * (Math.exp(-ke * t) - Math.exp(-ka * t));
 }
 
+// ── FORMULATION MODELS ───────────────────────────────────────
 const MODELS = {
   "Ritalin IR": (t, food) => {
     const tl = food ? 1.0 : 0;
@@ -69,29 +70,60 @@ const MED_CFG = {
   "Vyvanse / Elvanse": { type: "AMP", color: "#f87171" },
 };
 
+// ── CAFFEINE MODEL ───────────────────────────────────────────
 function caffModel(t, hl) {
   if (t <= 0) return 0;
   if (t < 0.75) return t / 0.75;
   return Math.exp(-(LN2 / hl) * (t - 0.75));
 }
 
-function nowH() {
-  const d = new Date();
-  return d.getHours() + d.getMinutes() / 60;
-}
-
+// ── HELPERS ──────────────────────────────────────────────────
+function nowH() { const d = new Date(); return d.getHours() + d.getMinutes() / 60; }
 function fmtH(h) {
   const n = ((h % 24) + 24) % 24;
-  return `${String(Math.floor(n)).padStart(2,"0")}:${String(Math.round((n%1)*60)).padStart(2,"0")}`;
+  return `${String(Math.floor(n)).padStart(2,"0")}:${String(Math.round((n % 1) * 60)).padStart(2,"0")}`;
+}
+function toH(s) { const [h, m] = s.split(":").map(Number); return h + m / 60; }
+
+// ── OPTIMAL INTAKE TIME ──────────────────────────────────────
+// For a given formulation and target window [twStart, twEnd], find the intake
+// time that maximises AUC of the concentration curve within the window.
+// This mirrors the "therapeutic box" approach (Marsot et al., PMC5460958).
+function calcOptimalIntakeTime(medName, twStart, twEnd, food) {
+  const STEP = 0.25;        // 15-min resolution
+  const N_INT = 120;        // integration points within window
+  let bestTime = null;
+  let bestScore = -Infinity;
+
+  for (let t = 4.0; t <= 12.0; t += STEP) {
+    let score = 0;
+    for (let i = 0; i <= N_INT; i++) {
+      const h = twStart + (twEnd - twStart) * i / N_INT;
+      score += MODELS[medName](h - t, food);
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestTime = t;
+    }
+  }
+  return bestTime;
 }
 
-function toH(s) {
-  const [h, m] = s.split(":").map(Number);
-  return h + m / 60;
-}
-
+// ── CHART DATA ───────────────────────────────────────────────
 function buildChart(doses, caffs, caffHL, preview, compare) {
   const N = 300, A = 5, B = 29;
+
+  // Find earliest dose time per type — curves start here, not at chart left edge
+  const mphDoses = doses.filter(d => MED_CFG[d.med].type === "MPH");
+  const ampDoses = doses.filter(d => MED_CFG[d.med].type === "AMP");
+  const firstMPH = mphDoses.length ? Math.min(...mphDoses.map(d => d.time)) : Infinity;
+  const firstAMP = ampDoses.length ? Math.min(...ampDoses.map(d => d.time)) : Infinity;
+  const firstCaff = caffs.length ? Math.min(...caffs.map(c => c.time)) : Infinity;
+
+  const prevType = preview ? MED_CFG[preview.med].type : null;
+  const firstPrevMPH = (prevType === "MPH") ? Math.min(firstMPH, preview.time) : firstMPH;
+  const firstPrevAMP = (prevType === "AMP") ? Math.min(firstAMP, preview.time) : firstAMP;
+
   const pts = Array.from({ length: N + 1 }, (_, i) => {
     const h = A + (B - A) * i / N;
     let mph = 0, amp = 0, caff = 0, pMph = 0, pAmp = 0, cMph = 0, cAmp = 0;
@@ -119,13 +151,14 @@ function buildChart(doses, caffs, caffHL, preview, compare) {
 
   const norm = pts.map(p => ({
     h: p.h,
-    mph:  mphPk  > 1e-8 ? p.mph  / mphPk  * 100 : 0,
-    amp:  ampPk  > 1e-8 ? p.amp  / ampPk  * 100 : 0,
-    caff: caffPk > 1e-8 ? p.caff / caffPk * 100 : 0,
-    pMph: preview && MED_CFG[preview.med].type==="MPH" ? p.pMph/pMphPk*100 : undefined,
-    pAmp: preview && MED_CFG[preview.med].type==="AMP" ? p.pAmp/pAmpPk*100 : undefined,
-    cMph: compare && MED_CFG[compare.med].type==="MPH" ? p.cMph/cMphPk*100 : undefined,
-    cAmp: compare && MED_CFG[compare.med].type==="AMP" ? p.cAmp/cAmpPk*100 : undefined,
+    // undefined before first dose → curve starts exactly at intake time
+    mph:  (mphPk  > 1e-8 && p.h >= firstMPH)  ? p.mph  / mphPk  * 100 : undefined,
+    amp:  (ampPk  > 1e-8 && p.h >= firstAMP)  ? p.amp  / ampPk  * 100 : undefined,
+    caff: (caffPk > 1e-8 && p.h >= firstCaff) ? p.caff / caffPk * 100 : undefined,
+    pMph: (preview && prevType === "MPH" && p.h >= firstPrevMPH) ? p.pMph / pMphPk * 100 : undefined,
+    pAmp: (preview && prevType === "AMP" && p.h >= firstPrevAMP) ? p.pAmp / pAmpPk * 100 : undefined,
+    cMph: (compare && MED_CFG[compare.med].type === "MPH") ? p.cMph / cMphPk * 100 : undefined,
+    cAmp: (compare && MED_CFG[compare.med].type === "AMP") ? p.cAmp / cAmpPk * 100 : undefined,
   }));
 
   return { norm, mphPk, ampPk, caffPk };
@@ -138,9 +171,9 @@ function getSleep(norm, doses, caffs, caffPk, weight) {
   const start = Math.max(nowH(), 16);
   for (const p of norm) {
     if (p.h < start) continue;
-    if (hasMPH && p.mph > 18) continue;
-    if (hasAMP && p.amp > 15) continue;
-    if (caffs.length > 0 && p.caff > thrPct) continue;
+    if (hasMPH && (p.mph ?? 0) > 18) continue;
+    if (hasAMP && (p.amp ?? 0) > 15) continue;
+    if (caffs.length > 0 && (p.caff ?? 0) > thrPct) continue;
     return p.h;
   }
   return null;
@@ -148,24 +181,11 @@ function getSleep(norm, doses, caffs, caffPk, weight) {
 
 // ── PERSISTENCE ───────────────────────────────────────────────
 const LS_KEY = "adhd_tl_v1";
+function saveLS(s) { try { localStorage.setItem(LS_KEY, JSON.stringify(s)); } catch {} }
+function loadLS() { try { return JSON.parse(localStorage.getItem(LS_KEY)); } catch { return null; } }
+function encodeShare(s) { try { return btoa(encodeURIComponent(JSON.stringify(s))); } catch { return ""; } }
+function decodeShare(h) { try { return JSON.parse(decodeURIComponent(atob(h))); } catch { return null; } }
 
-function saveLS(s) {
-  try { localStorage.setItem(LS_KEY, JSON.stringify(s)); } catch {}
-}
-
-function loadLS() {
-  try { return JSON.parse(localStorage.getItem(LS_KEY)); } catch { return null; }
-}
-
-function encodeShare(s) {
-  try { return btoa(encodeURIComponent(JSON.stringify(s))); } catch { return ""; }
-}
-
-function decodeShare(h) {
-  try { return JSON.parse(decodeURIComponent(atob(h))); } catch { return null; }
-}
-
-// ── MOBILE HOOK ───────────────────────────────────────────────
 function useIsMobile() {
   const [m, setM] = useState(() => window.innerWidth < 640);
   useEffect(() => {
@@ -186,12 +206,8 @@ const S = {
 // ── SUB-COMPONENTS ────────────────────────────────────────────
 function Toggle({ on, onChange }) {
   return (
-    <div
-      onClick={() => onChange(!on)}
-      role="switch"
-      aria-checked={on}
-      style={{ width: 40, height: 22, borderRadius: 11, background: on ? "#4f46e5" : "#334155", position: "relative", cursor: "pointer", flexShrink: 0, transition: "background .15s" }}
-    >
+    <div onClick={() => onChange(!on)} role="switch" aria-checked={on}
+      style={{ width: 40, height: 22, borderRadius: 11, background: on ? "#4f46e5" : "#334155", position: "relative", cursor: "pointer", flexShrink: 0, transition: "background .15s" }}>
       <div style={{ position: "absolute", top: 3, left: on ? 20 : 3, width: 16, height: 16, borderRadius: "50%", background: "#fff", transition: "left .15s" }} />
     </div>
   );
@@ -199,10 +215,7 @@ function Toggle({ on, onChange }) {
 
 function Btn({ children, color = "#4f46e5", onClick, small }) {
   return (
-    <button
-      onClick={onClick}
-      style={{ background: color, border: "none", borderRadius: 8, color: "#fff", padding: small ? "10px 16px" : "11px 0", fontSize: small ? 13 : 14, fontWeight: 600, cursor: "pointer", width: small ? "auto" : "100%", minHeight: 44 }}
-    >
+    <button onClick={onClick} style={{ background: color, border: "none", borderRadius: 8, color: "#fff", padding: small ? "10px 16px" : "11px 0", fontSize: small ? 13 : 14, fontWeight: 600, cursor: "pointer", width: small ? "auto" : "100%", minHeight: 44 }}>
       {children}
     </button>
   );
@@ -221,7 +234,68 @@ function MedSelect({ value, onChange }) {
   );
 }
 
-// ── MAIN APP ──────────────────────────────────────────────────
+// ── OPTIMAL TIMING CARD ───────────────────────────────────────
+function OptimalTimingCard({ tw, doses }) {
+  const suggestions = useMemo(() => {
+    if (!tw.on || tw.s >= tw.e) return [];
+
+    // Collect unique (med, food) combos already logged; if none logged yet,
+    // show suggestions for all formulation types.
+    const logged = doses.map(d => ({ med: d.med, food: d.food }));
+    const candidates = logged.length > 0
+      ? [...new Map(logged.map(d => [d.med + d.food, d])).values()]
+      : [
+          { med: "Ritalin LA",        food: false },
+          { med: "Concerta",          food: false },
+          { med: "Vyvanse / Elvanse", food: false },
+        ];
+
+    return candidates.map(({ med, food }) => {
+      const optTime = calcOptimalIntakeTime(med, tw.s, tw.e, food);
+      return { med, food, optTime };
+    });
+  }, [tw, doses]);
+
+  if (!tw.on || suggestions.length === 0) return null;
+
+  return (
+    <div style={{ ...S.card, marginBottom: 12, borderColor: "#1e3a5f" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <span style={{ fontSize: 16 }}>💡</span>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#e2e8f0" }}>Optimal intake times</div>
+          <div style={{ fontSize: 11, color: "#475569", marginTop: 1 }}>
+            Best coverage of {fmtH(tw.s)}–{fmtH(tw.e)} · maximises AUC within window
+          </div>
+        </div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {suggestions.map(({ med, food, optTime }) => (
+          <div key={med + food} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#0f172a", borderRadius: 8, padding: "8px 12px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: MED_CFG[med].color, flexShrink: 0 }} />
+              <div>
+                <div style={{ fontSize: 13, color: "#e2e8f0" }}>{med}</div>
+                {food && <div style={{ fontSize: 11, color: "#475569" }}>with food</div>}
+              </div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 17, fontWeight: 700, color: MED_CFG[med].color, fontVariantNumeric: "tabular-nums" }}>
+                {fmtH(optTime)}
+              </div>
+              <div style={{ fontSize: 10, color: "#475569" }}>take at</div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ fontSize: 11, color: "#334155", marginTop: 8, lineHeight: 1.5 }}>
+        Based on published PK parameters. Individual metabolism varies — use as a starting point, not a prescription.
+      </div>
+    </div>
+  );
+}
+
+// ── APP ──────────────────────────────────────────────────────
 export default function App() {
   const mobile = useIsMobile();
 
@@ -254,7 +328,6 @@ export default function App() {
   const [cmpTime,  setCmpTime]  = useState("08:00");
   const [cmpFood,  setCmpFood]  = useState(false);
 
-  // Load from URL hash (shared link), then fall back to localStorage
   useEffect(() => {
     const hash = window.location.hash.slice(1);
     if (hash) {
@@ -279,10 +352,7 @@ export default function App() {
     }
   }, []);
 
-  // Persist to localStorage on every relevant state change
-  useEffect(() => {
-    saveLS({ doses, caffs, weight, caffHL, tw });
-  }, [doses, caffs, weight, caffHL, tw]);
+  useEffect(() => { saveLS({ doses, caffs, weight, caffHL, tw }); }, [doses, caffs, weight, caffHL, tw]);
 
   const shareURL = useCallback(() => {
     const hash = encodeShare({ doses, caffs, weight, caffHL, tw });
@@ -304,7 +374,7 @@ export default function App() {
 
   const sleepT     = useMemo(() => getSleep(norm, doses, caffs, caffPk, weight), [norm, doses, caffs, caffPk, weight]);
   const caffThrPct = caffPk > 0 ? Math.min((weight * 0.6 / caffPk) * 100, 100) : 50;
-  const cur        = norm.reduce((b, p) => Math.abs(p.h - now) < Math.abs(b.h - now) ? p : b, norm[0] ?? { mph:0, amp:0, caff:0 });
+  const cur        = norm.reduce((b, p) => Math.abs(p.h - now) < Math.abs(b.h - now) ? p : b, norm[0] ?? { mph: undefined, amp: undefined, caff: undefined });
 
   const hasMPH  = doses.some(d => MED_CFG[d.med].type === "MPH");
   const hasAMP  = doses.some(d => MED_CFG[d.med].type === "AMP");
@@ -316,7 +386,7 @@ export default function App() {
     if (doses.some(d => MED_CFG[d.med].type === type)) {
       const pt = norm.find(p => Math.abs(p.h - t) < 0.1);
       if (pt) {
-        const lvl = type === "MPH" ? pt.mph : pt.amp;
+        const lvl = type === "MPH" ? (pt.mph ?? 0) : (pt.amp ?? 0);
         if (lvl > 50) setWarn({ level: Math.round(lvl), med: dMed });
       }
     }
@@ -329,7 +399,7 @@ export default function App() {
     return (
       <div style={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, padding: "8px 12px", fontSize: 12 }}>
         <div style={{ color: "#64748b", marginBottom: 4 }}>{fmtH(h)}</div>
-        {payload.map((p, i) => p.value > 0.5 &&
+        {payload.map((p, i) => (p.value ?? 0) > 0.5 &&
           <div key={i} style={{ color: p.color, margin: "1px 0" }}>{p.name}: {Math.round(p.value)}%</div>
         )}
       </div>
@@ -341,14 +411,11 @@ export default function App() {
 
   return (
     <div style={{
-      background: "#0f172a",
-      minHeight: "100dvh",
-      color: "#e2e8f0",
+      background: "#0f172a", minHeight: "100dvh", color: "#e2e8f0",
       fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
       padding: `${pad}px ${pad}px env(safe-area-inset-bottom, 16px)`,
       paddingTop: `max(${pad}px, env(safe-area-inset-top, 0px))`,
-      maxWidth: 700,
-      margin: "0 auto",
+      maxWidth: 700, margin: "0 auto",
     }}>
 
       {/* Header */}
@@ -357,10 +424,7 @@ export default function App() {
           <h1 style={{ margin: 0, fontSize: mobile ? 17 : 20, fontWeight: 700 }}>ADHD Medication Timeline</h1>
           <p style={{ margin: "3px 0 0", fontSize: 11, color: "#475569" }}>Estimated plasma curves · Published PK models · Not medical advice</p>
         </div>
-        <button
-          onClick={shareURL}
-          style={{ background: copied ? "#059669" : "#1e293b", border: "1px solid #334155", borderRadius: 8, color: copied ? "#fff" : "#94a3b8", padding: "8px 12px", fontSize: 12, cursor: "pointer", flexShrink: 0, marginLeft: 8, minHeight: 44, minWidth: 80, transition: "background .2s, color .2s" }}
-        >
+        <button onClick={shareURL} style={{ background: copied ? "#059669" : "#1e293b", border: "1px solid #334155", borderRadius: 8, color: copied ? "#fff" : "#94a3b8", padding: "8px 12px", fontSize: 12, cursor: "pointer", flexShrink: 0, marginLeft: 8, minHeight: 44, minWidth: 80, transition: "background .2s, color .2s" }}>
           {copied ? "✓ Copied!" : "🔗 Share"}
         </button>
       </div>
@@ -369,10 +433,10 @@ export default function App() {
       {(hasMPH || hasAMP || hasCaff || sleepT) && (
         <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 12, flexWrap: "wrap" }}>
           {[
-            hasMPH  && { label: "MPH now",      val: `${Math.round(cur.mph)}%`,  color: "#818cf8" },
-            hasAMP  && { label: "AMP now",       val: `${Math.round(cur.amp)}%`,  color: "#f97316" },
-            hasCaff && { label: "Caffeine",      val: `${Math.round(cur.caff)}%`, color: "#fbbf24" },
-            sleepT  && { label: "Sleep-ready ~", val: fmtH(sleepT),               color: "#34d399" },
+            hasMPH  && { label: "MPH now",      val: `${Math.round(cur.mph ?? 0)}%`,  color: "#818cf8" },
+            hasAMP  && { label: "AMP now",       val: `${Math.round(cur.amp ?? 0)}%`,  color: "#f97316" },
+            hasCaff && { label: "Caffeine",      val: `${Math.round(cur.caff ?? 0)}%`, color: "#fbbf24" },
+            sleepT  && { label: "Sleep-ready ~", val: fmtH(sleepT),                    color: "#34d399" },
           ].filter(Boolean).map(({ label, val, color }) => (
             <div key={label} style={{ background: "#1e293b", borderRadius: 12, padding: "8px 16px", textAlign: "center", border: "1px solid #1e3a5f", minWidth: 72 }}>
               <div style={{ fontSize: mobile ? 20 : 22, fontWeight: 700, color, lineHeight: 1.1 }}>{val}</div>
@@ -393,6 +457,9 @@ export default function App() {
         </div>
       )}
 
+      {/* Optimal intake time suggestions */}
+      <OptimalTimingCard tw={tw} doses={doses} />
+
       {/* Chart */}
       <div style={{ ...S.card, padding: "14px 4px 8px", marginBottom: 12 }}>
         <ResponsiveContainer width="100%" height={mobile ? 195 : 245}>
@@ -401,34 +468,50 @@ export default function App() {
               {[["mph","#818cf8"],["amp","#f97316"],["caff","#fbbf24"]].map(([k,c]) => (
                 <linearGradient key={k} id={`g${k}`} x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%"  stopColor={c} stopOpacity={0.32} />
-                  <stop offset="95%" stopColor={c} stopOpacity={0}    />
+                  <stop offset="95%" stopColor={c} stopOpacity={0} />
                 </linearGradient>
               ))}
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" vertical={false} />
-            <XAxis
-              dataKey="h" type="number" domain={[5,29]}
+            <XAxis dataKey="h" type="number" domain={[5,29]}
               ticks={mobile ? [6,9,12,15,18,21,24] : [6,8,10,12,14,16,18,20,22,24,26,28]}
-              tickFormatter={fmtH} tick={{ fill:"#475569", fontSize: mobile ? 9 : 10 }} tickLine={false}
-            />
-            <YAxis
-              domain={[0,105]} ticks={[0,25,50,75,100]}
-              tick={{ fill:"#475569", fontSize: mobile ? 9 : 10 }} tickLine={false} tickFormatter={v=>`${v}%`}
-            />
+              tickFormatter={fmtH} tick={{ fill:"#475569", fontSize: mobile ? 9 : 10 }} tickLine={false} />
+            <YAxis domain={[0,105]} ticks={[0,25,50,75,100]}
+              tick={{ fill:"#475569", fontSize: mobile ? 9 : 10 }} tickLine={false} tickFormatter={v=>`${v}%`} />
             <Tooltip content={<ChartTip />} />
+
+            {/* Target window */}
             {tw.on && <ReferenceArea x1={tw.s} x2={tw.e} fill="#22c55e" fillOpacity={0.07} stroke="#22c55e" strokeOpacity={0.3} strokeDasharray="4 4" />}
+
+            {/* Sleep threshold lines */}
             {hasMPH  && <ReferenceLine y={18} stroke="#818cf8" strokeDasharray="3 5" strokeOpacity={0.4} label={{ value:"sleep ↓", fill:"#818cf8", fontSize:9, position:"insideTopRight" }} />}
             {hasAMP  && <ReferenceLine y={15} stroke="#f97316" strokeDasharray="3 5" strokeOpacity={0.4} />}
             {hasCaff && <ReferenceLine y={caffThrPct} stroke="#fbbf24" strokeDasharray="3 5" strokeOpacity={0.4} />}
+
+            {/* Now + sleep markers */}
             <ReferenceLine x={now} stroke="#34d399" strokeWidth={1.5} strokeDasharray="4 3" label={{ value:"Now", fill:"#34d399", fontSize:10, position:"insideTopRight" }} />
             {sleepT && <ReferenceLine x={sleepT} stroke="#a78bfa" strokeWidth={1.5} strokeDasharray="4 3" label={{ value:"Sleep", fill:"#a78bfa", fontSize:10, position:"insideTopRight" }} />}
-            {cmpOn && MED_CFG[cMed].type==="MPH" && <Area type="monotone" dataKey="cMph" name="Compare" stroke="#38bdf8" strokeWidth={2} fill="none" dot={false} strokeDasharray="8 4" connectNulls />}
-            {cmpOn && MED_CFG[cMed].type==="AMP" && <Area type="monotone" dataKey="cAmp" name="Compare" stroke="#fb7185" strokeWidth={2} fill="none" dot={false} strokeDasharray="8 4" connectNulls />}
-            {prvOn && MED_CFG[pMed].type==="MPH" && <Area type="monotone" dataKey="pMph" name="Preview" stroke="#e2e8f0" strokeWidth={1.5} fill="none" dot={false} strokeDasharray="3 3" strokeOpacity={0.5} connectNulls />}
-            {prvOn && MED_CFG[pMed].type==="AMP" && <Area type="monotone" dataKey="pAmp" name="Preview" stroke="#e2e8f0" strokeWidth={1.5} fill="none" dot={false} strokeDasharray="3 3" strokeOpacity={0.5} connectNulls />}
-            {hasMPH  && <Area type="monotone" dataKey="mph"  name="MPH"      stroke="#818cf8" strokeWidth={2.5} fill="url(#gmph)"  dot={false} connectNulls />}
-            {hasAMP  && <Area type="monotone" dataKey="amp"  name="AMP"      stroke="#f97316" strokeWidth={2.5} fill="url(#gamp)"  dot={false} connectNulls />}
-            {hasCaff && <Area type="monotone" dataKey="caff" name="Caffeine" stroke="#fbbf24" strokeWidth={2}   fill="url(#gcaff)" dot={false} connectNulls />}
+
+            {/* Dose intake markers — vertical tick at each dose time */}
+            {doses.map(d => (
+              <ReferenceLine key={d.id} x={d.time}
+                stroke={MED_CFG[d.med].color} strokeWidth={1.5} strokeOpacity={0.7} strokeDasharray="2 3"
+                label={{ value: "▼", fill: MED_CFG[d.med].color, fontSize: 10, position: "insideTopLeft" }}
+              />
+            ))}
+
+            {/* Compare overlay */}
+            {cmpOn && MED_CFG[cMed].type==="MPH" && <Area type="monotone" dataKey="cMph" name="Compare" stroke="#38bdf8" strokeWidth={2} fill="none" dot={false} strokeDasharray="8 4" connectNulls={false} />}
+            {cmpOn && MED_CFG[cMed].type==="AMP" && <Area type="monotone" dataKey="cAmp" name="Compare" stroke="#fb7185" strokeWidth={2} fill="none" dot={false} strokeDasharray="8 4" connectNulls={false} />}
+
+            {/* Preview ghost */}
+            {prvOn && MED_CFG[pMed].type==="MPH" && <Area type="monotone" dataKey="pMph" name="Preview" stroke="#e2e8f0" strokeWidth={1.5} fill="none" dot={false} strokeDasharray="3 3" strokeOpacity={0.5} connectNulls={false} />}
+            {prvOn && MED_CFG[pMed].type==="AMP" && <Area type="monotone" dataKey="pAmp" name="Preview" stroke="#e2e8f0" strokeWidth={1.5} fill="none" dot={false} strokeDasharray="3 3" strokeOpacity={0.5} connectNulls={false} />}
+
+            {/* Main curves — connectNulls=false so they start at dose time */}
+            {hasMPH  && <Area type="monotone" dataKey="mph"  name="MPH"      stroke="#818cf8" strokeWidth={2.5} fill="url(#gmph)"  dot={false} connectNulls={false} />}
+            {hasAMP  && <Area type="monotone" dataKey="amp"  name="AMP"      stroke="#f97316" strokeWidth={2.5} fill="url(#gamp)"  dot={false} connectNulls={false} />}
+            {hasCaff && <Area type="monotone" dataKey="caff" name="Caffeine" stroke="#fbbf24" strokeWidth={2}   fill="url(#gcaff)" dot={false} connectNulls={false} />}
           </AreaChart>
         </ResponsiveContainer>
 
@@ -443,6 +526,7 @@ export default function App() {
           {prvOn   && <span style={{ color:"#94a3b8" }}>- - Preview</span>}
           {cmpOn   && <span style={{ color:"#38bdf8" }}>- - Compare</span>}
           {tw.on   && <span style={{ color:"#22c55e" }}>▪ Target window</span>}
+          {doses.length > 0 && <span style={{ color:"#475569" }}>▼ Dose taken</span>}
         </div>
       </div>
 
@@ -561,9 +645,11 @@ export default function App() {
 
               <div>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8 }}>
-                  <div style={{ flex:1, paddingRight:12 }}>
+                  <div>
                     <div style={{ fontSize:13, fontWeight:600 }}>Symptom target window</div>
-                    <div style={{ fontSize:11, color:"#64748b" }}>Shade the hours you need medication coverage — see gaps visually</div>
+                    <div style={{ fontSize:11, color:"#64748b" }}>
+                      Shade the hours you need coverage — enables optimal intake time suggestions
+                    </div>
                   </div>
                   <Toggle on={tw.on} onChange={v => setTw(t => ({ ...t, on: v }))} />
                 </div>
@@ -571,11 +657,11 @@ export default function App() {
                   <div style={grid2}>
                     <div>
                       <label style={S.lbl}>Start</label>
-                      <input type="time" value={fmtH(tw.s)} onChange={e=>setTw(t=>({...t,s:toH(e.target.value)}))} style={S.inp} />
+                      <input type="time" value={fmtH(tw.s)} onChange={e => setTw(t => ({ ...t, s: toH(e.target.value) }))} style={S.inp} />
                     </div>
                     <div>
                       <label style={S.lbl}>End</label>
-                      <input type="time" value={fmtH(tw.e)} onChange={e=>setTw(t=>({...t,e:toH(e.target.value)}))} style={S.inp} />
+                      <input type="time" value={fmtH(tw.e)} onChange={e => setTw(t => ({ ...t, e: toH(e.target.value) }))} style={S.inp} />
                     </div>
                   </div>
                 )}
@@ -583,9 +669,9 @@ export default function App() {
 
               <div>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8 }}>
-                  <div style={{ flex:1, paddingRight:12 }}>
+                  <div>
                     <div style={{ fontSize:13, fontWeight:600 }}>Compare formulations</div>
-                    <div style={{ fontSize:11, color:"#64748b" }}>Overlay a second formulation (independently normalized) to compare timing and coverage shape</div>
+                    <div style={{ fontSize:11, color:"#64748b" }}>Overlay a second formulation independently normalized</div>
                   </div>
                   <Toggle on={cmpOn} onChange={setCmpOn} />
                 </div>
@@ -618,7 +704,6 @@ export default function App() {
               </div>
             </div>
           )}
-
         </div>
       </div>
 
@@ -632,14 +717,14 @@ export default function App() {
                 <span style={{ width:7, height:7, borderRadius:"50%", background:MED_CFG[d.med].color, flexShrink:0 }} />
                 <span>{d.med} {d.amount}mg @ {fmtH(d.time)}</span>
                 {d.food && <span style={{ fontSize:10, color:"#475569" }}>🍽</span>}
-                <button onClick={()=>setDoses(p=>p.filter(x=>x.id!==d.id))} style={{ background:"none", border:"none", color:"#475569", cursor:"pointer", fontSize:18, minWidth:36, minHeight:36 }}>×</button>
+                <button onClick={() => setDoses(p => p.filter(x => x.id !== d.id))} style={{ background:"none", border:"none", color:"#475569", cursor:"pointer", fontSize:18, minWidth:36, minHeight:36 }}>×</button>
               </div>
             ))}
             {caffs.map(c => (
               <div key={c.id} style={{ display:"flex", alignItems:"center", gap:6, background:"#0f172a", borderRadius:8, padding:"6px 10px", fontSize:12, border:"1px solid #1e3a5f" }}>
                 <span style={{ color:"#fbbf24" }}>☕</span>
                 <span>{c.amount}mg @ {fmtH(c.time)}</span>
-                <button onClick={()=>setCaffs(p=>p.filter(x=>x.id!==c.id))} style={{ background:"none", border:"none", color:"#475569", cursor:"pointer", fontSize:18, minWidth:36, minHeight:36 }}>×</button>
+                <button onClick={() => setCaffs(p => p.filter(x => x.id !== c.id))} style={{ background:"none", border:"none", color:"#475569", cursor:"pointer", fontSize:18, minWidth:36, minHeight:36 }}>×</button>
               </div>
             ))}
           </div>
@@ -647,7 +732,7 @@ export default function App() {
       )}
 
       <p style={{ textAlign:"center", color:"#1e3a5f", fontSize:11, marginTop:8, lineHeight:1.6 }}>
-        MPH t½ 2.5h · d-AMP t½ 11h · Caffeine t½ adjustable · Individual pharmacokinetics vary considerably.<br />
+        MPH t½ 2.5h · d-AMP t½ 11h · Caffeine t½ adjustable<br />
         Not a medical device. Consult your prescriber before adjusting treatment.
       </p>
     </div>
