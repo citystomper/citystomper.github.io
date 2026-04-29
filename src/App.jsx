@@ -234,26 +234,37 @@ function MedSelect({ value, onChange }) {
   );
 }
 
+// Food-effect Tmax delays in hours, sourced from FDA labels and peer-reviewed PK studies.
+// Used to decide whether to prominently display a food/fasted split.
+// Sources: Adderall XR FDA label (2013), Vyvanse FDA label (2017),
+//          Modi et al. 2000 (Concerta), Pharmaceutical Research MPH-IR study,
+//          Tandfonline ADHD long-acting PK review (2019).
+const FOOD_DELAY_H = {
+  "Ritalin IR":        0.5,   // +0.5h (Pharmaceutical Research, 2001)
+  "Ritalin LA":        1.0,   // +1.0h (both SODAS peaks shift, review 2019)
+  "Medikinet CR":      0.5,   // +0.5h (similar SODAS mechanism, clinically minor)
+  "Concerta":          0.5,   // +0.5h (Modi et al. 2000 — OROS minimally affected)
+  "Adderall IR":       0.5,   // +0.5h (Caras 2020 — minor delay)
+  "Adderall XR":       2.5,   // +2.5h (FDA label — clinically significant)
+  "Vyvanse / Elvanse": 1.0,   // +1.0h (FDA label — high-fat meal)
+};
+
 // ── OPTIMAL TIMING CARD ───────────────────────────────────────
 function OptimalTimingCard({ tw, doses }) {
   const suggestions = useMemo(() => {
     if (!tw.on || tw.s >= tw.e) return [];
 
-    // Collect unique (med, food) combos already logged; if none logged yet,
-    // show suggestions for all formulation types.
-    const logged = doses.map(d => ({ med: d.med, food: d.food }));
-    const candidates = logged.length > 0
-      ? [...new Map(logged.map(d => [d.med + d.food, d])).values()]
-      : [
-          { med: "Ritalin LA",        food: false },
-          { med: "Concerta",          food: false },
-          { med: "Vyvanse / Elvanse", food: false },
-        ];
+    // Unique meds: from logged doses if any, else show default set
+    const meds = doses.length > 0
+      ? [...new Set(doses.map(d => d.med))]
+      : ["Ritalin LA", "Concerta", "Vyvanse / Elvanse"];
 
-    return candidates.map(({ med, food }) => {
-      const optTime = calcOptimalIntakeTime(med, tw.s, tw.e, food);
-      return { med, food, optTime };
-    });
+    return meds.map(med => ({
+      med,
+      fasted: calcOptimalIntakeTime(med, tw.s, tw.e, false),
+      fed:    calcOptimalIntakeTime(med, tw.s, tw.e, true),
+      delay:  FOOD_DELAY_H[med],
+    }));
   }, [tw, doses]);
 
   if (!tw.on || suggestions.length === 0) return null;
@@ -263,33 +274,43 @@ function OptimalTimingCard({ tw, doses }) {
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
         <span style={{ fontSize: 16 }}>💡</span>
         <div>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#e2e8f0" }}>Optimal intake times</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#e2e8f0" }}>Optimal intake times for your target window</div>
           <div style={{ fontSize: 11, color: "#475569", marginTop: 1 }}>
             Best coverage of {fmtH(tw.s)}–{fmtH(tw.e)} · maximises AUC within window
           </div>
         </div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {suggestions.map(({ med, food, optTime }) => (
-          <div key={med + food} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#0f172a", borderRadius: 8, padding: "8px 12px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {suggestions.map(({ med, fasted, fed, delay }) => (
+          <div key={med} style={{ background: "#0f172a", borderRadius: 8, padding: "10px 12px" }}>
+            {/* Med name row */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
               <span style={{ width: 8, height: 8, borderRadius: "50%", background: MED_CFG[med].color, flexShrink: 0 }} />
-              <div>
-                <div style={{ fontSize: 13, color: "#e2e8f0" }}>{med}</div>
-                {food && <div style={{ fontSize: 11, color: "#475569" }}>with food</div>}
-              </div>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "#e2e8f0" }}>{med}</span>
             </div>
-            <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 17, fontWeight: 700, color: MED_CFG[med].color, fontVariantNumeric: "tabular-nums" }}>
-                {fmtH(optTime)}
+            {/* Fasted / fed side by side */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+              <div style={{ background: "#1e293b", borderRadius: 6, padding: "6px 10px" }}>
+                <div style={{ fontSize: 10, color: "#475569", marginBottom: 2 }}>Fasted</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: MED_CFG[med].color, fontVariantNumeric: "tabular-nums" }}>
+                  {fmtH(fasted)}
+                </div>
               </div>
-              <div style={{ fontSize: 10, color: "#475569" }}>take at</div>
+              <div style={{ background: "#1e293b", borderRadius: 6, padding: "6px 10px" }}>
+                <div style={{ fontSize: 10, color: "#475569", marginBottom: 2 }}>
+                  With food
+                  {delay >= 1.0 && <span style={{ color: "#f97316", marginLeft: 4 }}>+{delay}h ⚠</span>}
+                </div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: MED_CFG[med].color, fontVariantNumeric: "tabular-nums" }}>
+                  {fmtH(fed)}
+                </div>
+              </div>
             </div>
           </div>
         ))}
       </div>
       <div style={{ fontSize: 11, color: "#334155", marginTop: 8, lineHeight: 1.5 }}>
-        Based on published PK parameters. Individual metabolism varies — use as a starting point, not a prescription.
+        Food delays sourced from FDA labels (Adderall XR, Vyvanse) and peer-reviewed PK studies. ⚠ marks delays ≥1h. Individual metabolism varies.
       </div>
     </div>
   );
@@ -526,7 +547,10 @@ export default function App() {
           {prvOn   && <span style={{ color:"#94a3b8" }}>- - Preview</span>}
           {cmpOn   && <span style={{ color:"#38bdf8" }}>- - Compare</span>}
           {tw.on   && <span style={{ color:"#22c55e" }}>▪ Target window</span>}
-          {doses.length > 0 && <span style={{ color:"#475569" }}>▼ Dose taken</span>}
+          {/* One ▼ legend entry per unique medication color */}
+          {[...new Map(doses.map(d => [d.med, d])).values()].map(d => (
+            <span key={d.med} style={{ color: MED_CFG[d.med].color }}>▼ {d.med.split(" ")[0]}</span>
+          ))}
         </div>
       </div>
 
