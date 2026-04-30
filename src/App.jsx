@@ -1,730 +1,714 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, ReferenceLine, ReferenceArea
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+  ReferenceLine, ReferenceArea, ResponsiveContainer,
 } from "recharts";
+import "./App.css";
 
-// ── iOS SYSTEM COLORS (HIG dark mode) ────────────────────────
-const C = {
-  bg0:     '#000000',
-  bg1:     '#1C1C1E',
-  bg2:     '#2C2C2E',
-  bg3:     '#3A3A3C',
-  sep:     'rgba(84,84,88,0.65)',
-  label:   '#FFFFFF',
-  label2:  'rgba(235,235,245,0.6)',
-  label3:  'rgba(235,235,245,0.3)',
-  blue:    '#0A84FF',
-  green:   '#30D158',
-  orange:  '#FF9F0A',
-  yellow:  '#FFD60A',
-  indigo:  '#5E5CE6',
-  purple:  '#BF5AF2',
-  red:     '#FF453A',
-  teal:    '#40CBE0',
-  cyan:    '#32ADE6',
-};
+// ─── PK MATHEMATICS ──────────────────────────────────────────────────────────
 
-// ── PK CONSTANTS ─────────────────────────────────────────────
-const LN2 = Math.LN2;
-const MPH_KE = LN2 / 2.5;
-const AMP_KE = LN2 / 11.0;
-
-function bateman(t, ka, ke) {
+function bateman(t, dose, ka, ke) {
   if (t <= 0) return 0;
-  if (Math.abs(ka - ke) < 1e-4) return ka * t * Math.exp(-ke * t);
-  return (ka / (ka - ke)) * (Math.exp(-ke * t) - Math.exp(-ka * t));
+  if (Math.abs(ka - ke) < 0.001) return dose * ka * t * Math.exp(-ke * t);
+  return dose * (ka / (ka - ke)) * (Math.exp(-ke * t) - Math.exp(-ka * t));
 }
 
-const MODELS = {
-  "Ritalin IR":        (t, f) => bateman(Math.max(0, t - (f ? 1.0 : 0)), 2.0, MPH_KE),
-  "Ritalin LA":        (t, f) => { const tl = f ? 1.0 : 0; return 0.5 * bateman(Math.max(0, t - tl), 2.0, MPH_KE) + 0.5 * bateman(Math.max(0, t - tl - 3.5), 0.7, MPH_KE); },
-  "Medikinet CR":      (t, f) => { const tl = f ? 0.5 : 0; return 0.5 * bateman(Math.max(0, t - tl), 2.0, MPH_KE) + 0.5 * bateman(Math.max(0, t - tl - 3.0), 0.65, MPH_KE); },
-  "Concerta":          (t, f) => { const tl = f ? 0.5 : 0; const te = Math.max(0, t - tl); const ir = 0.22 * bateman(te, 2.0, MPH_KE); const s0 = 0.5, s1 = 7.0, R = 0.78 / (s1 - s0); let oros = 0; if (te >= s1) { oros = (R / MPH_KE) * (1 - Math.exp(-MPH_KE * (s1 - s0))) * Math.exp(-MPH_KE * (te - s1)); } else if (te >= s0) { oros = (R / MPH_KE) * (1 - Math.exp(-MPH_KE * (te - s0))); } return ir + oros; },
-  "Adderall IR":       (t, f) => bateman(Math.max(0, t - (f ? 0.5 : 0)), 1.2, AMP_KE),
-  "Adderall XR":       (t, f) => { const tl = f ? 0.5 : 0; return 0.5 * bateman(Math.max(0, t - tl), 1.2, AMP_KE) + 0.5 * bateman(Math.max(0, t - tl - 4.0), 1.2, AMP_KE); },
-  "Vyvanse / Elvanse": (t, f) => bateman(Math.max(0, t - (f ? 1.0 : 0)), 0.75, AMP_KE),
-};
-
-const MED_CFG = {
-  "Ritalin IR":        { type: "MPH", color: C.indigo },
-  "Ritalin LA":        { type: "MPH", color: C.purple },
-  "Medikinet CR":      { type: "MPH", color: '#A78BFA' },
-  "Concerta":          { type: "MPH", color: C.cyan },
-  "Adderall IR":       { type: "AMP", color: C.orange },
-  "Adderall XR":       { type: "AMP", color: C.yellow },
-  "Vyvanse / Elvanse": { type: "AMP", color: C.red },
-};
-
-const ALL_MEDS = Object.keys(MED_CFG);
-const MPH_MEDS = ALL_MEDS.filter(m => MED_CFG[m].type === "MPH");
-const AMP_MEDS = ALL_MEDS.filter(m => MED_CFG[m].type === "AMP");
-
-function caffModel(t, hl) {
-  if (t <= 0) return 0;
-  if (t < 0.75) return t / 0.75;
-  return Math.exp(-(LN2 / hl) * (t - 0.75));
+function pkMPH(t, dose, form, fd = 0) {
+  const s = t - fd;
+  switch (form) {
+    case "Ritalin IR":    return bateman(s, dose, 2.40, 0.278);
+    case "Ritalin LA":
+    case "Medikinet CR":  return bateman(s, dose*0.5, 2.40, 0.278) + bateman(s-3.5, dose*0.5, 2.40, 0.278);
+    case "Concerta": {
+      const ir = bateman(s, dose*0.22, 3.0, 0.278);
+      let oros = 0;
+      for (let i = 0; i <= 7; i++) oros += bateman(s - i*(6.5/7), dose*0.78/8, 5.0, 0.278);
+      return ir + oros;
+    }
+    default: return 0;
+  }
 }
 
-function nowH() { const d = new Date(); return d.getHours() + d.getMinutes() / 60; }
+function pkAMP(t, dose, form, fd = 0) {
+  const s = t - fd;
+  const ke = 0.0631;
+  switch (form) {
+    case "Adderall IR": return bateman(s, dose, 1.2, ke);
+    case "Adderall XR": return bateman(s, dose*0.5, 1.2, ke) + bateman(s-4, dose*0.5, 1.2, ke);
+    case "Vyvanse":
+    case "Elvanse":     return bateman(s, dose*0.695, 0.75, ke);
+    default: return 0;
+  }
+}
+
+function pkCaff(t, dose, hl, fd = 0) {
+  const s = t - fd;
+  if (s <= 0) return 0;
+  const ke = Math.LN2 / hl;
+  if (s < 0.75) return dose * (s / 0.75);
+  return dose * Math.exp(-ke * (s - 0.75));
+}
+
+// ─── CONFIG ───────────────────────────────────────────────────────────────────
+
+const MEDS = {
+  "Ritalin IR":   { color: "#0066cc", type: "mph" },
+  "Ritalin LA":   { color: "#32ade6", type: "mph" },
+  "Medikinet CR": { color: "#30b0c7", type: "mph" },
+  "Concerta":     { color: "#5856d6", type: "mph" },
+  "Adderall IR":  { color: "#ff6b35", type: "amp" },
+  "Adderall XR":  { color: "#ff9f0a", type: "amp" },
+  "Vyvanse":      { color: "#af52de", type: "amp" },
+  "Elvanse":      { color: "#bf5af2", type: "amp" },
+};
+
+const CAFF_COLOR = "#b8860b";
+let _uid = 1;
+const uid = () => _uid++;
 
 function fmtH(h) {
   const n = ((h % 24) + 24) % 24;
-  return `${String(Math.floor(n)).padStart(2, "0")}:${String(Math.round((n % 1) * 60)).padStart(2, "0")}`;
+  const hh = Math.floor(n);
+  const mm = Math.round((n - hh) * 60);
+  return `${hh}:${mm.toString().padStart(2, "0")}`;
 }
 
-function toH(s) { const [h, m] = s.split(":").map(Number); return h + m / 60; }
+// ─── ICONS ────────────────────────────────────────────────────────────────────
 
-function buildChart(doses, caffs, caffHL, preview, compare) {
-  const N = 300, A = 5, B = 29;
-  const pts = Array.from({ length: N + 1 }, (_, i) => {
-    const h = A + (B - A) * i / N;
-    let mph = 0, amp = 0, caff = 0, pMph = 0, pAmp = 0, cMph = 0, cAmp = 0;
-    doses.forEach(d => { const c = MODELS[d.med](h - d.time, d.food) * d.amount; MED_CFG[d.med].type === "MPH" ? (mph += c) : (amp += c); });
-    caffs.forEach(c => { caff += c.amount * caffModel(h - c.time, caffHL); });
-    if (preview) { const c = MODELS[preview.med](h - preview.time, preview.food) * preview.amount; MED_CFG[preview.med].type === "MPH" ? (pMph = mph + c) : (pAmp = amp + c); }
-    if (compare) { const c = MODELS[compare.med](h - compare.time, compare.food) * compare.amount; MED_CFG[compare.med].type === "MPH" ? (cMph += c) : (cAmp += c); }
-    return { h, mph, amp, caff, pMph, pAmp, cMph, cAmp };
-  });
-  const pk = k => Math.max(...pts.map(p => p[k]), 1e-9);
-  const mphPk = pk("mph"), ampPk = pk("amp"), caffPk = pk("caff");
-  const pMphPk = Math.max(pk("pMph"), mphPk), pAmpPk = Math.max(pk("pAmp"), ampPk);
-  const cMphPk = pk("cMph"), cAmpPk = pk("cAmp");
-  const norm = pts.map(p => ({
-    h: p.h,
-    mph:  mphPk  > 1e-8 ? p.mph  / mphPk  * 100 : 0,
-    amp:  ampPk  > 1e-8 ? p.amp  / ampPk  * 100 : 0,
-    caff: caffPk > 1e-8 ? p.caff / caffPk * 100 : 0,
-    pMph: preview && MED_CFG[preview.med].type === "MPH" ? p.pMph / pMphPk * 100 : undefined,
-    pAmp: preview && MED_CFG[preview.med].type === "AMP" ? p.pAmp / pAmpPk * 100 : undefined,
-    cMph: compare && MED_CFG[compare.med].type === "MPH" ? p.cMph / cMphPk * 100 : undefined,
-    cAmp: compare && MED_CFG[compare.med].type === "AMP" ? p.cAmp / cAmpPk * 100 : undefined,
-  }));
-  return { norm, caffPk };
-}
+const GearIcon = () => (
+  <svg width="17" height="17" viewBox="0 0 17 17" fill="none">
+    <circle cx="8.5" cy="8.5" r="2.5" stroke="currentColor" strokeWidth="1.5"/>
+    <path d="M8.5 1.5v1.5M8.5 14v1.5M1.5 8.5H3M14 8.5h1.5M3.55 3.55l1.06 1.06M12.39 12.39l1.06 1.06M3.55 13.45l1.06-1.06M12.39 4.61l1.06-1.06"
+      stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+  </svg>
+);
 
-function getSleep(norm, doses, caffs, caffPk, weight) {
-  const hasMPH = doses.some(d => MED_CFG[d.med].type === "MPH");
-  const hasAMP = doses.some(d => MED_CFG[d.med].type === "AMP");
-  const thrPct = caffPk > 0 ? (weight * 0.6 / caffPk) * 100 : 999;
-  const start = Math.max(nowH(), 16);
-  for (const p of norm) {
-    if (p.h < start) continue;
-    if (hasMPH && p.mph > 18) continue;
-    if (hasAMP && p.amp > 15) continue;
-    if (caffs.length > 0 && p.caff > thrPct) continue;
-    return p.h;
-  }
-  return null;
-}
+const ShareIcon = () => (
+  <svg width="17" height="17" viewBox="0 0 17 17" fill="none">
+    <path d="M8.5 1v9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+    <path d="M5.5 4L8.5 1l3 3" stroke="currentColor" strokeWidth="1.5"
+      strokeLinecap="round" strokeLinejoin="round"/>
+    <path d="M4 7H3a1 1 0 00-1 1v7a1 1 0 001 1h11a1 1 0 001-1V8a1 1 0 00-1-1h-1"
+      stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+  </svg>
+);
 
-// ── PERSISTENCE ───────────────────────────────────────────────
-const LS_KEY = "adhd_tl_v1";
-function saveLS(s) { try { localStorage.setItem(LS_KEY, JSON.stringify(s)); } catch {} }
-function loadLS() { try { return JSON.parse(localStorage.getItem(LS_KEY)); } catch { return null; } }
-function encodeShare(s) { try { return btoa(encodeURIComponent(JSON.stringify(s))); } catch { return ""; } }
-function decodeShare(h) { try { return JSON.parse(decodeURIComponent(atob(h))); } catch { return null; } }
+const PlusIcon = ({ size = 20 }) => (
+  <svg width={size} height={size} viewBox="0 0 20 20" fill="none">
+    <path d="M10 4v12M4 10h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+  </svg>
+);
 
-function useIsMobile() {
-  const [m, setM] = useState(() => window.innerWidth < 640);
-  useEffect(() => {
-    const fn = () => setM(window.innerWidth < 640);
-    window.addEventListener("resize", fn, { passive: true });
-    return () => window.removeEventListener("resize", fn);
-  }, []);
-  return m;
-}
+// ─── TOOLTIP ─────────────────────────────────────────────────────────────────
 
-// ── HIG COMPONENTS ────────────────────────────────────────────
-
-// Segmented Control (HIG: use for 2–5 mutually exclusive options in context)
-function SegmentedControl({ tabs, active, onChange }) {
+function ChartTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
   return (
-    <div style={{ display: "flex", background: C.bg2, borderRadius: 9, padding: 2, gap: 2 }}>
-      {tabs.map(([k, label]) => (
-        <button key={k} onClick={() => onChange(k)} style={{
-          flex: 1, border: "none", borderRadius: 7, padding: "7px 4px",
-          fontSize: 13, fontWeight: active === k ? 600 : 400,
-          color: active === k ? C.label : C.label2,
-          background: active === k ? C.bg3 : "transparent",
-          cursor: "pointer", transition: "background .15s, color .15s",
-          whiteSpace: "nowrap", minHeight: 32,
-          boxShadow: active === k ? "0 1px 3px rgba(0,0,0,0.4)" : "none",
-        }}>{label}</button>
+    <div className="tooltip">
+      <div className="tooltip-time">{fmtH(label)}</div>
+      {payload.filter(p => p.value > 0.5).map(p => (
+        <div key={p.dataKey} className="tooltip-row">
+          <span className="tooltip-dot" style={{ background: p.color }} />
+          <span className="tooltip-name">{p.name}</span>
+          <span className="tooltip-val">{p.value.toFixed(0)}%</span>
+        </div>
       ))}
     </div>
   );
 }
 
-// iOS-style Toggle (HIG: use system green for on state)
-function Toggle({ on, onChange }) {
-  return (
-    <div onClick={() => onChange(!on)} role="switch" aria-checked={on} style={{
-      width: 51, height: 31, borderRadius: 15.5,
-      background: on ? C.green : C.bg3,
-      position: "relative", cursor: "pointer", flexShrink: 0,
-      transition: "background .2s",
-      boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.1)",
-    }}>
-      <div style={{
-        position: "absolute", top: 2, left: on ? 22 : 2,
-        width: 27, height: 27, borderRadius: "50%",
-        background: "#fff",
-        boxShadow: "0 2px 6px rgba(0,0,0,0.35)",
-        transition: "left .2s",
-      }} />
-    </div>
-  );
-}
+// ─── FORM COMPONENTS ─────────────────────────────────────────────────────────
 
-// Grouped Section wrapper (HIG: inset grouped style)
-function Section({ title, footer, children }) {
+function DoseForm({ value, onChange, onAdd, onCancel }) {
   return (
-    <div style={{ marginBottom: 24 }}>
-      {title && (
-        <div style={{ fontSize: 13, fontWeight: 400, color: C.label2, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8, paddingLeft: 16 }}>
-          {title}
+    <div className="inline-form">
+      <select className="f-select" value={value.med}
+        onChange={e => onChange({ ...value, med: e.target.value })}>
+        {Object.keys(MEDS).map(m => <option key={m} value={m}>{m}</option>)}
+      </select>
+      <div className="f-row">
+        <div className="f-field">
+          <label className="f-label">mg</label>
+          <input type="number" className="f-input" value={value.amount}
+            min={1} max={200} step={1}
+            onChange={e => onChange({ ...value, amount: +e.target.value })} />
         </div>
-      )}
-      <div style={{ background: C.bg1, borderRadius: 12, overflow: "hidden" }}>
-        {children}
-      </div>
-      {footer && (
-        <div style={{ fontSize: 13, color: C.label2, marginTop: 8, paddingLeft: 16, paddingRight: 16, lineHeight: 1.5 }}>
-          {footer}
+        <div className="f-field">
+          <label className="f-label">time</label>
+          <input type="number" className="f-input" value={value.time}
+            min={0} max={23} step={0.5}
+            onChange={e => onChange({ ...value, time: +e.target.value })} />
         </div>
-      )}
-    </div>
-  );
-}
-
-// Form row (HIG: 44pt min height, full-width, hairline separator)
-function Row({ label, detail, children, last, onPress, destructive }) {
-  const base = {
-    display: "flex", alignItems: "center", justifyContent: "space-between",
-    minHeight: 44, padding: "10px 16px", gap: 12,
-    borderBottom: last ? "none" : `1px solid ${C.sep}`,
-    cursor: onPress ? "pointer" : "default",
-  };
-  return (
-    <div style={base} onClick={onPress}>
-      {label && (
-        <span style={{ fontSize: 17, color: destructive ? C.red : C.label, flexShrink: 0 }}>{label}</span>
-      )}
-      {detail && (
-        <span style={{ fontSize: 17, color: C.label2, marginLeft: "auto", marginRight: children ? 8 : 0 }}>{detail}</span>
-      )}
-      {children}
-    </div>
-  );
-}
-
-// Full-width slider row
-function SliderRow({ label, value, min, max, step, onChange, color, last }) {
-  return (
-    <div style={{ padding: "12px 16px", borderBottom: last ? "none" : `1px solid ${C.sep}` }}>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-        <span style={{ fontSize: 15, color: C.label }}>{label}</span>
-        <span style={{ fontSize: 15, color: C.label2, fontVariantNumeric: "tabular-nums" }}>{value}</span>
       </div>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={e => onChange(+e.target.value)}
-        style={{ width: "100%", accentColor: color || C.blue, height: 4 }} />
-    </div>
-  );
-}
-
-// Primary CTA button (HIG: full-width only for primary action, capsule shape)
-function PrimaryBtn({ children, onClick, color, disabled }) {
-  return (
-    <button onClick={onClick} disabled={disabled} style={{
-      width: "100%", border: "none", borderRadius: 12,
-      padding: "14px 0", fontSize: 17, fontWeight: 600,
-      color: "#fff", background: color || C.blue,
-      cursor: "pointer", minHeight: 50,
-      opacity: disabled ? 0.4 : 1,
-    }}>{children}</button>
-  );
-}
-
-// Inline text button (HIG: for secondary/destructive actions)
-function TextBtn({ children, onClick, color }) {
-  return (
-    <button onClick={onClick} style={{
-      background: "none", border: "none",
-      fontSize: 17, color: color || C.blue,
-      cursor: "pointer", padding: "8px 0", minHeight: 44,
-    }}>{children}</button>
-  );
-}
-
-// iOS-style select (full row)
-function SelectRow({ label, value, onChange, options, last }) {
-  return (
-    <div style={{ padding: "0 16px", borderBottom: last ? "none" : `1px solid ${C.sep}` }}>
-      <div style={{ display: "flex", alignItems: "center", minHeight: 44, gap: 8 }}>
-        <span style={{ fontSize: 17, color: C.label, flexShrink: 0, minWidth: 80 }}>{label}</span>
-        <select value={value} onChange={e => onChange(e.target.value)} style={{
-          flex: 1, background: "transparent", border: "none",
-          color: C.label2, fontSize: 17, textAlign: "right",
-          outline: "none", cursor: "pointer", direction: "rtl",
-        }}>
-          {options.map(([v, l]) => <option key={v} value={v} style={{ background: C.bg1, direction: "ltr" }}>{l}</option>)}
-        </select>
+      <label className="f-toggle">
+        <input type="checkbox" checked={value.food}
+          onChange={e => onChange({ ...value, food: e.target.checked })} />
+        <span>With food</span>
+      </label>
+      <div className="f-actions">
+        <button className="f-btn-cancel" onClick={onCancel}>Cancel</button>
+        <button className="f-btn-add" onClick={onAdd}>Add</button>
       </div>
     </div>
   );
 }
 
-// Time picker row
-function TimeRow({ label, value, onChange, last }) {
+function CaffForm({ value, onChange, onAdd, onCancel }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", minHeight: 44, padding: "0 16px", gap: 8, borderBottom: last ? "none" : `1px solid ${C.sep}` }}>
-      <span style={{ fontSize: 17, color: C.label, flex: 1 }}>{label}</span>
-      <input type="time" value={value} onChange={e => onChange(e.target.value)} style={{
-        background: "transparent", border: "none", color: C.label2,
-        fontSize: 17, outline: "none", textAlign: "right",
-      }} />
-    </div>
-  );
-}
-
-// Checkbox row
-function CheckRow({ label, checked, onChange, last }) {
-  return (
-    <div onClick={() => onChange(!checked)} style={{
-      display: "flex", alignItems: "center", minHeight: 44,
-      padding: "0 16px", gap: 12, cursor: "pointer",
-      borderBottom: last ? "none" : `1px solid ${C.sep}`,
-    }}>
-      <div style={{
-        width: 22, height: 22, borderRadius: 11, flexShrink: 0,
-        background: checked ? C.blue : "transparent",
-        border: checked ? "none" : `2px solid ${C.bg3}`,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        transition: "background .15s",
-      }}>
-        {checked && <span style={{ color: "#fff", fontSize: 13, lineHeight: 1 }}>✓</span>}
+    <div className="inline-form">
+      <div className="f-row">
+        <div className="f-field">
+          <label className="f-label">mg</label>
+          <input type="number" className="f-input" value={value.amount}
+            min={10} max={600} step={10}
+            onChange={e => onChange({ ...value, amount: +e.target.value })} />
+        </div>
+        <div className="f-field">
+          <label className="f-label">time</label>
+          <input type="number" className="f-input" value={value.time}
+            min={0} max={23} step={0.5}
+            onChange={e => onChange({ ...value, time: +e.target.value })} />
+        </div>
       </div>
-      <span style={{ fontSize: 17, color: C.label }}>{label}</span>
+      <label className="f-toggle">
+        <input type="checkbox" checked={value.food}
+          onChange={e => onChange({ ...value, food: e.target.checked })} />
+        <span>With food</span>
+      </label>
+      <div className="f-actions">
+        <button className="f-btn-cancel" onClick={onCancel}>Cancel</button>
+        <button className="f-btn-add" onClick={onAdd}>Add</button>
+      </div>
     </div>
   );
 }
 
-// Stat badge (large number + label)
-function StatBadge({ value, label, color }) {
+function SettingsForm({ settings, onChange }) {
+  const set = (k, v) => onChange({ ...settings, [k]: v });
   return (
-    <div style={{
-      flex: 1, minWidth: 72, background: C.bg1, borderRadius: 14,
-      padding: "12px 10px", textAlign: "center",
-    }}>
-      <div style={{ fontSize: 26, fontWeight: 700, color, lineHeight: 1.1, fontVariantNumeric: "tabular-nums" }}>{value}</div>
-      <div style={{ fontSize: 11, color: C.label3, marginTop: 3, letterSpacing: 0.2 }}>{label}</div>
+    <div className="settings-form">
+      <div className="ss-row">
+        <span className="ss-label">Target window</span>
+        <div className="ss-inputs">
+          <input type="number" className="ss-input" value={settings.targetStart}
+            min={0} max={23} step={0.5}
+            onChange={e => set("targetStart", +e.target.value)} />
+          <span className="ss-sep">—</span>
+          <input type="number" className="ss-input" value={settings.targetEnd}
+            min={1} max={24} step={0.5}
+            onChange={e => set("targetEnd", +e.target.value)} />
+        </div>
+      </div>
+      <div className="ss-row">
+        <span className="ss-label">Sleep time</span>
+        <input type="number" className="ss-input" value={settings.sleepTime}
+          min={18} max={30} step={0.5}
+          onChange={e => set("sleepTime", +e.target.value)} />
+      </div>
+      <div className="ss-row">
+        <span className="ss-label">Weight (kg)</span>
+        <input type="number" className="ss-input" value={settings.weight}
+          min={40} max={160} step={1}
+          onChange={e => set("weight", +e.target.value)} />
+      </div>
+      <div className="ss-row ss-row-slider">
+        <span className="ss-label">Caffeine t½</span>
+        <div className="ss-slider-wrap">
+          <input type="range" className="ss-slider" value={settings.caffHL}
+            min={2} max={9} step={0.5}
+            onChange={e => set("caffHL", +e.target.value)} />
+          <span className="ss-slider-val">{settings.caffHL}h</span>
+        </div>
+      </div>
     </div>
   );
 }
 
-// ── MAIN APP ──────────────────────────────────────────────────
+// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+
 export default function App() {
-  const mobile = useIsMobile();
+  const [doses, setDoses]       = useState([]);
+  const [caffs, setCaffs]       = useState([]);
+  const [compareOn, setCompare] = useState(false);
+  const [cmp, setCmp]           = useState({ med: "Ritalin LA", amount: 10, time: 8 });
+  const [settings, setSettings] = useState({
+    targetStart: 8, targetEnd: 18, sleepTime: 23, caffHL: 5, weight: 75,
+  });
 
-  const [doses,  setDoses]  = useState([]);
-  const [caffs,  setCaffs]  = useState([]);
-  const [weight, setWeight] = useState(75);
-  const [caffHL, setCaffHL] = useState(5);
-  const [tw,     setTw]     = useState({ on: false, s: 9, e: 17 });
-  const [tab,    setTab]    = useState("dose");
-  const [warn,   setWarn]   = useState(null);
-  const [copied, setCopied] = useState(false);
+  const [adding, setAdding]   = useState(null); // null | 'dose' | 'caff'
+  const [newDose, setNewDose] = useState({ med: "Ritalin IR", amount: 10, time: 8, food: false });
+  const [newCaff, setNewCaff] = useState({ amount: 100, time: 8, food: false });
 
-  const [dMed,  setDMed]  = useState("Ritalin LA");
-  const [dAmt,  setDAmt]  = useState(20);
-  const [dTime, setDTime] = useState("08:00");
-  const [dFood, setDFood] = useState(false);
+  const [modal, setModal] = useState(null);   // null | 'add' | 'settings'
+  const [mTab, setMTab]   = useState("dose");
 
-  const [cAmt,  setCAmt]  = useState(80);
-  const [cTime, setCTime] = useState("09:00");
-
-  const [prvOn, setPrvOn] = useState(false);
-  const [pMed,  setPMed]  = useState("Ritalin IR");
-  const [pAmt,  setPAmt]  = useState(10);
-  const [pTime, setPTime] = useState("13:00");
-  const [pFood, setPFood] = useState(false);
-
-  const [cmpOn,   setCmpOn]   = useState(false);
-  const [cMed,    setCMed]    = useState("Concerta");
-  const [cmpAmt,  setCmpAmt]  = useState(36);
-  const [cmpTime, setCmpTime] = useState("08:00");
-  const [cmpFood, setCmpFood] = useState(false);
-
+  // ── Persistence ──────────────────────────────────────────────────────────────
   useEffect(() => {
-    const hash = window.location.hash.slice(1);
-    if (hash) {
-      const s = decodeShare(hash);
-      if (s) {
-        if (s.doses)  setDoses(s.doses);
-        if (s.caffs)  setCaffs(s.caffs);
-        if (s.weight) setWeight(s.weight);
-        if (s.caffHL) setCaffHL(s.caffHL);
-        if (s.tw)     setTw(s.tw);
-        window.history.replaceState(null, "", window.location.pathname);
-        return;
+    try {
+      const raw = localStorage.getItem("pk-v2");
+      if (raw) {
+        const d = JSON.parse(raw);
+        if (d.doses)          setDoses(d.doses);
+        if (d.caffs)          setCaffs(d.caffs);
+        if (d.settings)       setSettings(s => ({ ...s, ...d.settings }));
+        if (d.cmp)            setCmp(d.cmp);
+        if (d.compareOn != null) setCompare(d.compareOn);
       }
-    }
-    const ls = loadLS();
-    if (ls) {
-      if (ls.doses)  setDoses(ls.doses);
-      if (ls.caffs)  setCaffs(ls.caffs);
-      if (ls.weight) setWeight(ls.weight);
-      if (ls.caffHL) setCaffHL(ls.caffHL);
-      if (ls.tw)     setTw(ls.tw);
-    }
+    } catch {}
   }, []);
 
-  useEffect(() => { saveLS({ doses, caffs, weight, caffHL, tw }); }, [doses, caffs, weight, caffHL, tw]);
+  useEffect(() => {
+    try {
+      localStorage.setItem("pk-v2", JSON.stringify({ doses, caffs, settings, cmp, compareOn }));
+    } catch {}
+  }, [doses, caffs, settings, cmp, compareOn]);
 
-  const shareURL = useCallback(() => {
-    const hash = encodeShare({ doses, caffs, weight, caffHL, tw });
-    const url = `${window.location.origin}${window.location.pathname}#${hash}`;
-    navigator.clipboard.writeText(url).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2200);
-    });
-  }, [doses, caffs, weight, caffHL, tw]);
+  useEffect(() => {
+    try {
+      const p = new URLSearchParams(location.search).get("d");
+      if (p) {
+        const d = JSON.parse(atob(p));
+        if (d.doses)          setDoses(d.doses);
+        if (d.caffs)          setCaffs(d.caffs);
+        if (d.settings)       setSettings(s => ({ ...s, ...d.settings }));
+        if (d.cmp)            setCmp(d.cmp);
+        if (d.compareOn != null) setCompare(d.compareOn);
+      }
+    } catch {}
+  }, []);
 
-  const now = nowH();
-  const previewObj = prvOn ? { med: pMed, amount: pAmt, time: toH(pTime), food: pFood } : null;
-  const compareObj = cmpOn ? { med: cMed, amount: cmpAmt, time: toH(cmpTime), food: cmpFood } : null;
+  const share = () => {
+    const p = btoa(JSON.stringify({ doses, caffs, settings, cmp, compareOn }));
+    navigator.clipboard.writeText(`${location.origin}${location.pathname}?d=${p}`).catch(() => {});
+  };
 
-  const { norm, caffPk } = useMemo(
-    () => buildChart(doses, caffs, caffHL, previewObj, compareObj),
-    [doses, caffs, caffHL, prvOn, pMed, pAmt, pTime, pFood, cmpOn, cMed, cmpAmt, cmpTime, cmpFood]
-  );
-
-  const sleepT     = useMemo(() => getSleep(norm, doses, caffs, caffPk, weight), [norm, doses, caffs, caffPk, weight]);
-  const caffThrPct = caffPk > 0 ? Math.min((weight * 0.6 / caffPk) * 100, 100) : 50;
-  const cur        = norm.reduce((b, p) => Math.abs(p.h - now) < Math.abs(b.h - now) ? p : b, norm[0] ?? { mph: 0, amp: 0, caff: 0 });
-
-  const hasMPH  = doses.some(d => MED_CFG[d.med].type === "MPH");
-  const hasAMP  = doses.some(d => MED_CFG[d.med].type === "AMP");
-  const hasCaff = caffs.length > 0;
-
-  const addDose = () => {
-    const t = toH(dTime);
-    const type = MED_CFG[dMed].type;
-    if (doses.some(d => MED_CFG[d.med].type === type)) {
-      const pt = norm.find(p => Math.abs(p.h - t) < 0.1);
-      if (pt && (type === "MPH" ? pt.mph : pt.amp) > 50)
-        setWarn({ level: Math.round(type === "MPH" ? pt.mph : pt.amp), med: dMed });
+  // ── Chart ─────────────────────────────────────────────────────────────────────
+  const { pts, stats } = useMemo(() => {
+    const raw = [];
+    for (let t = 0; t <= 24; t += 0.1) {
+      let mph = 0, amp = 0, caff = 0, cmpV = 0;
+      for (const d of doses) {
+        const fd = d.food ? (MEDS[d.med]?.type === "amp" ? 1.0 : 0.75) : 0;
+        if (MEDS[d.med]?.type === "mph") mph  += pkMPH(t - d.time, d.amount, d.med, fd);
+        if (MEDS[d.med]?.type === "amp") amp  += pkAMP(t - d.time, d.amount, d.med, fd);
+      }
+      for (const c of caffs) caff += pkCaff(t - c.time, c.amount, settings.caffHL, c.food ? 0.5 : 0);
+      if (compareOn) {
+        const cfg = MEDS[cmp.med];
+        if (cfg?.type === "mph") cmpV = pkMPH(t - cmp.time, cmp.amount, cmp.med, 0);
+        if (cfg?.type === "amp") cmpV = pkAMP(t - cmp.time, cmp.amount, cmp.med, 0);
+      }
+      raw.push({ t: +t.toFixed(1), mph, amp, caff, cmp: cmpV });
     }
-    setDoses(p => [...p, { id: Date.now(), med: dMed, amount: dAmt, time: t, food: dFood }]);
-  };
 
-  const ChartTip = ({ active, payload }) => {
-    if (!active || !payload?.length) return null;
-    return (
-      <div style={{ background: C.bg2, borderRadius: 10, padding: "8px 12px", fontSize: 13, border: `1px solid ${C.sep}` }}>
-        <div style={{ color: C.label2, marginBottom: 4, fontVariantNumeric: "tabular-nums" }}>{fmtH(payload[0]?.payload?.h)}</div>
-        {payload.map((p, i) => p.value > 0.5 &&
-          <div key={i} style={{ color: p.color, margin: "2px 0", fontVariantNumeric: "tabular-nums" }}>{p.name}: {Math.round(p.value)}%</div>
-        )}
-      </div>
-    );
-  };
+    const pMPH  = Math.max(...raw.map(p => p.mph),  0.001);
+    const pAMP  = Math.max(...raw.map(p => p.amp),  0.001);
+    const pCaff = Math.max(...raw.map(p => p.caff), 0.001);
+    const pCmp  = Math.max(...raw.map(p => p.cmp),  0.001);
 
-  const medOptions = [
-    ...MPH_MEDS.map(m => [m, m]),
-    ...AMP_MEDS.map(m => [m, m]),
-  ];
+    const hasMPH  = doses.some(d => MEDS[d.med]?.type === "mph");
+    const hasAMP  = doses.some(d => MEDS[d.med]?.type === "amp");
+    const hasCaff = caffs.length > 0;
 
-  const drinkOptions = [
-    [30, "Espresso — 30 mg"],
-    [60, "Double espresso — 60 mg"],
-    [80, "Filter coffee 200ml — 80 mg"],
-    [150, "Large coffee — 150 mg"],
-    [40, "Green tea — 40 mg"],
-    [80, "Black tea — 80 mg"],
-    [35, "Cola 350ml — 35 mg"],
-    [80, "Energy drink 250ml — 80 mg"],
-    [160, "Energy drink 500ml — 160 mg"],
-  ];
+    let sleepOk = null;
+    for (const p of raw) {
+      if (p.t < 10) continue;
+      const ok =
+        (!hasMPH  || p.mph  < pMPH  * 0.18) &&
+        (!hasAMP  || p.amp  < pAMP  * 0.15) &&
+        (!hasCaff || p.caff < settings.weight * 0.6);
+      if (ok) { sleepOk = p.t; break; }
+    }
 
-  const px = mobile ? 16 : 20;
+    const maxBy = key => raw.reduce((best, p) => p[key] > best[key] ? p : best, raw[0]);
+
+    return {
+      pts: raw.map(p => ({
+        t:    p.t,
+        mph:  +(p.mph  / pMPH  * 100).toFixed(1),
+        amp:  +(p.amp  / pAMP  * 100).toFixed(1),
+        caff: +(p.caff / pCaff * 100).toFixed(1),
+        cmp:  compareOn ? +(p.cmp / pCmp * 100).toFixed(1) : undefined,
+      })),
+      stats: {
+        sleepOk, hasMPH, hasAMP, hasCaff,
+        peakMPH: maxBy("mph"), peakAMP: maxBy("amp"), peakCaff: maxBy("caff"),
+      },
+    };
+  }, [doses, caffs, settings, compareOn, cmp]);
+
+  const hasAny = stats.hasMPH || stats.hasAMP || stats.hasCaff;
+
+  const addDose = () => { setDoses(d => [...d, { ...newDose, id: uid() }]); setAdding(null); };
+  const addCaff = () => { setCaffs(c => [...c, { ...newCaff, id: uid() }]); setAdding(null); };
+  const toggleAdding = type => setAdding(a => a === type ? null : type);
 
   return (
-    <div style={{
-      background: C.bg0,
-      minHeight: "100dvh",
-      color: C.label,
-      fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif",
-      WebkitFontSmoothing: "antialiased",
-      paddingLeft: px, paddingRight: px,
-      paddingTop: `max(${px}px, env(safe-area-inset-top, 0px))`,
-      paddingBottom: `max(${px}px, env(safe-area-inset-bottom, 0px))`,
-      maxWidth: 680,
-      margin: "0 auto",
-    }}>
+    <>
+      <svg style={{ display: "none" }} aria-hidden="true">
+        <defs>
+          <filter id="glass-distortion" x="0%" y="0%" width="100%" height="100%">
+            <feTurbulence type="fractalNoise" baseFrequency="0.008 0.008"
+              numOctaves="2" seed="92" result="noise" />
+            <feGaussianBlur in="noise" stdDeviation="2" result="blurred" />
+            <feDisplacementMap in="SourceGraphic" in2="blurred" scale="55"
+              xChannelSelector="R" yChannelSelector="G" />
+          </filter>
+        </defs>
+      </svg>
 
-      {/* ── Navigation bar ── */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: mobile ? 28 : 34, fontWeight: 700, letterSpacing: 0.3, lineHeight: 1.1 }}>
-            Medication Timeline
-          </h1>
-          <p style={{ margin: "4px 0 0", fontSize: 13, color: C.label3 }}>
-            Estimated plasma concentration · Not medical advice
-          </p>
-        </div>
-        <button onClick={shareURL} style={{
-          background: copied ? C.green : C.bg1,
-          border: "none", borderRadius: 20,
-          color: copied ? "#fff" : C.blue,
-          padding: "8px 14px", fontSize: 15, fontWeight: 500,
-          cursor: "pointer", flexShrink: 0, marginLeft: 12,
-          minHeight: 44, minWidth: 80, transition: "all .2s",
-          display: "flex", alignItems: "center", gap: 5,
-        }}>
-          {copied ? "✓ Copied" : "⎘ Share"}
-        </button>
+      <div className="bg" aria-hidden="true">
+        <div className="blob b1" /><div className="blob b2" /><div className="blob b3" />
       </div>
 
-      {/* ── Stacking warning (HIG: inline alert, not modal) ── */}
-      {warn && (
-        <div style={{
-          background: 'rgba(255,69,58,0.15)', borderRadius: 12,
-          padding: "12px 16px", marginBottom: 16,
-          border: `1px solid rgba(255,69,58,0.3)`,
-          display: "flex", justifyContent: "space-between", alignItems: "center",
-        }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: C.red, marginBottom: 2 }}>Dose stacking detected</div>
-            <div style={{ fontSize: 13, color: C.label2 }}>{warn.med} was still at ~{warn.level}% when this dose was added</div>
+      <div className="layout">
+
+        {/* ══ SIDEBAR (desktop only) ══════════════════════════════════════ */}
+        <aside className="sidebar glass">
+          <div className="sb-hdr">
+            <div>
+              <h1 className="sb-title">PK Timeline</h1>
+              <p className="sb-sub">Pharmacokinetics</p>
+            </div>
+            <div className="sb-hdr-btns">
+              <button className="icon-btn" onClick={share} title="Copy share link"><ShareIcon /></button>
+              <button className="icon-btn" title="Settings"
+                onClick={() => document.getElementById("sb-settings")?.scrollIntoView({ behavior: "smooth" })}>
+                <GearIcon />
+              </button>
+            </div>
           </div>
-          <button onClick={() => setWarn(null)} style={{ background: "none", border: "none", color: C.label3, cursor: "pointer", fontSize: 20, minWidth: 44, minHeight: 44 }}>✕</button>
-        </div>
-      )}
 
-      {/* ── Stat badges ── */}
-      {(hasMPH || hasAMP || hasCaff || sleepT) && (
-        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-          {hasMPH  && <StatBadge value={`${Math.round(cur.mph)}%`}  label="MPH now"       color={C.indigo} />}
-          {hasAMP  && <StatBadge value={`${Math.round(cur.amp)}%`}  label="AMP now"       color={C.orange} />}
-          {hasCaff && <StatBadge value={`${Math.round(cur.caff)}%`} label="Caffeine"      color={C.yellow} />}
-          {sleepT  && <StatBadge value={fmtH(sleepT)}               label="Sleep-ready ~" color={C.green}  />}
-        </div>
-      )}
+          <div className="sb-body">
 
-      {/* ── Chart ── */}
-      <div style={{ background: C.bg1, borderRadius: 16, padding: "14px 4px 10px", marginBottom: 24 }}>
-        <ResponsiveContainer width="100%" height={mobile ? 195 : 240}>
-          <AreaChart data={norm} margin={{ top: 6, right: 14, left: -18, bottom: 0 }}>
-            <defs>
-              {[["mph", C.indigo], ["amp", C.orange], ["caff", C.yellow]].map(([k, c]) => (
-                <linearGradient key={k} id={`g${k}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%"  stopColor={c} stopOpacity={0.28} />
-                  <stop offset="95%" stopColor={c} stopOpacity={0} />
-                </linearGradient>
+            {/* Doses */}
+            <div className="sb-section">
+              <div className="sb-section-hdr">
+                <span className="sb-lbl">Doses</span>
+                <button className={`sb-plus${adding === "dose" ? " active" : ""}`}
+                  onClick={() => toggleAdding("dose")}>
+                  <PlusIcon size={13} />
+                </button>
+              </div>
+              {adding === "dose" && (
+                <DoseForm value={newDose} onChange={setNewDose}
+                  onAdd={addDose} onCancel={() => setAdding(null)} />
+              )}
+              {doses.length === 0 && adding !== "dose" && (
+                <p className="sb-empty">No doses — tap + to add</p>
+              )}
+              {doses.map(d => (
+                <div key={d.id} className="sb-row">
+                  <span className="sb-dot" style={{ background: MEDS[d.med]?.color }} />
+                  <div className="sb-row-info">
+                    <span className="sb-row-name">{d.med}</span>
+                    <span className="sb-row-meta">{d.amount}mg · {fmtH(d.time)}{d.food ? " · food" : ""}</span>
+                  </div>
+                  <button className="sb-del"
+                    onClick={() => setDoses(p => p.filter(x => x.id !== d.id))}>×</button>
+                </div>
               ))}
-            </defs>
-            <CartesianGrid strokeDasharray="2 4" stroke={C.sep} vertical={false} />
-            <XAxis dataKey="h" type="number" domain={[5, 29]}
-              ticks={mobile ? [6, 9, 12, 15, 18, 21, 24] : [6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28]}
-              tickFormatter={fmtH} tick={{ fill: C.label3, fontSize: mobile ? 10 : 11 }} tickLine={false} axisLine={false} />
-            <YAxis domain={[0, 105]} ticks={[0, 25, 50, 75, 100]}
-              tick={{ fill: C.label3, fontSize: mobile ? 10 : 11 }} tickLine={false} axisLine={false} tickFormatter={v => `${v}%`} />
-            <Tooltip content={<ChartTip />} />
+            </div>
 
-            {tw.on && <ReferenceArea x1={tw.s} x2={tw.e} fill={C.green} fillOpacity={0.06} stroke={C.green} strokeOpacity={0.25} strokeDasharray="4 4" />}
-            {hasMPH  && <ReferenceLine y={18} stroke={C.indigo} strokeDasharray="3 5" strokeOpacity={0.5} label={{ value: "sleep ↓", fill: C.indigo, fontSize: 9, position: "insideTopRight" }} />}
-            {hasAMP  && <ReferenceLine y={15} stroke={C.orange} strokeDasharray="3 5" strokeOpacity={0.5} />}
-            {hasCaff && <ReferenceLine y={caffThrPct} stroke={C.yellow} strokeDasharray="3 5" strokeOpacity={0.5} />}
-            <ReferenceLine x={now} stroke={C.green} strokeWidth={1.5} strokeDasharray="3 4"
-              label={{ value: "Now", fill: C.green, fontSize: 10, position: "insideTopRight" }} />
-            {sleepT && <ReferenceLine x={sleepT} stroke={C.purple} strokeWidth={1.5} strokeDasharray="3 4"
-              label={{ value: "Sleep", fill: C.purple, fontSize: 10, position: "insideTopRight" }} />}
+            {/* Caffeine */}
+            <div className="sb-section">
+              <div className="sb-section-hdr">
+                <span className="sb-lbl">Caffeine</span>
+                <button className={`sb-plus${adding === "caff" ? " active" : ""}`}
+                  onClick={() => toggleAdding("caff")}>
+                  <PlusIcon size={13} />
+                </button>
+              </div>
+              {adding === "caff" && (
+                <CaffForm value={newCaff} onChange={setNewCaff}
+                  onAdd={addCaff} onCancel={() => setAdding(null)} />
+              )}
+              {caffs.length === 0 && adding !== "caff" && (
+                <p className="sb-empty">No caffeine — tap + to add</p>
+              )}
+              {caffs.map(c => (
+                <div key={c.id} className="sb-row">
+                  <span className="sb-dot" style={{ background: "#ffd60a" }} />
+                  <div className="sb-row-info">
+                    <span className="sb-row-name">Caffeine</span>
+                    <span className="sb-row-meta">{c.amount}mg · {fmtH(c.time)}{c.food ? " · food" : ""}</span>
+                  </div>
+                  <button className="sb-del"
+                    onClick={() => setCaffs(p => p.filter(x => x.id !== c.id))}>×</button>
+                </div>
+              ))}
+            </div>
 
-            {cmpOn && MED_CFG[cMed].type === "MPH" && <Area type="monotone" dataKey="cMph" name="Compare" stroke={C.teal} strokeWidth={1.5} fill="none" dot={false} strokeDasharray="8 4" connectNulls />}
-            {cmpOn && MED_CFG[cMed].type === "AMP" && <Area type="monotone" dataKey="cAmp" name="Compare" stroke={C.teal} strokeWidth={1.5} fill="none" dot={false} strokeDasharray="8 4" connectNulls />}
-            {prvOn && MED_CFG[pMed].type === "MPH" && <Area type="monotone" dataKey="pMph" name="Preview" stroke={C.label2} strokeWidth={1.5} fill="none" dot={false} strokeDasharray="3 3" strokeOpacity={0.6} connectNulls />}
-            {prvOn && MED_CFG[pMed].type === "AMP" && <Area type="monotone" dataKey="pAmp" name="Preview" stroke={C.label2} strokeWidth={1.5} fill="none" dot={false} strokeDasharray="3 3" strokeOpacity={0.6} connectNulls />}
-            {hasMPH  && <Area type="monotone" dataKey="mph"  name="MPH"      stroke={C.indigo} strokeWidth={2.5} fill="url(#gmph)"  dot={false} connectNulls />}
-            {hasAMP  && <Area type="monotone" dataKey="amp"  name="AMP"      stroke={C.orange} strokeWidth={2.5} fill="url(#gamp)"  dot={false} connectNulls />}
-            {hasCaff && <Area type="monotone" dataKey="caff" name="Caffeine" stroke={C.yellow} strokeWidth={2}   fill="url(#gcaff)" dot={false} connectNulls />}
-          </AreaChart>
-        </ResponsiveContainer>
+            {/* Compare */}
+            <div className="sb-section">
+              <div className="sb-section-hdr">
+                <span className="sb-lbl">Compare</span>
+                <label className="sb-toggle">
+                  <input type="checkbox" checked={compareOn}
+                    onChange={e => setCompare(e.target.checked)} />
+                  <span className="sb-track" />
+                </label>
+              </div>
+              {compareOn && (
+                <div className="inline-form">
+                  <select className="f-select" value={cmp.med}
+                    onChange={e => setCmp(c => ({ ...c, med: e.target.value }))}>
+                    {Object.keys(MEDS).map(m => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                  <div className="f-row">
+                    <div className="f-field">
+                      <label className="f-label">mg</label>
+                      <input type="number" className="f-input" value={cmp.amount}
+                        min={1} max={200} step={1}
+                        onChange={e => setCmp(c => ({ ...c, amount: +e.target.value }))} />
+                    </div>
+                    <div className="f-field">
+                      <label className="f-label">time</label>
+                      <input type="number" className="f-input" value={cmp.time}
+                        min={0} max={23} step={0.5}
+                        onChange={e => setCmp(c => ({ ...c, time: +e.target.value }))} />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
 
-        {!hasMPH && !hasAMP && !hasCaff && (
-          <p style={{ textAlign: "center", color: C.label3, fontSize: 15, margin: "0 0 8px" }}>Add a dose below to see your curve</p>
-        )}
+            {/* Settings */}
+            <div className="sb-section" id="sb-settings">
+              <div className="sb-section-hdr">
+                <span className="sb-lbl">Settings</span>
+              </div>
+              <SettingsForm settings={settings} onChange={setSettings} />
+            </div>
 
-        {(hasMPH || hasAMP || hasCaff || prvOn || cmpOn || tw.on) && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center", paddingTop: 6, paddingBottom: 2, paddingLeft: 8, paddingRight: 8 }}>
-            {hasMPH  && <span style={{ fontSize: 12, color: C.indigo }}>— MPH</span>}
-            {hasAMP  && <span style={{ fontSize: 12, color: C.orange }}>— AMP</span>}
-            {hasCaff && <span style={{ fontSize: 12, color: C.yellow }}>— Caffeine</span>}
-            {prvOn   && <span style={{ fontSize: 12, color: C.label3 }}>- - Preview</span>}
-            {cmpOn   && <span style={{ fontSize: 12, color: C.teal  }}>- - Compare</span>}
-            {tw.on   && <span style={{ fontSize: 12, color: C.green }}>▪ Target window</span>}
           </div>
-        )}
-      </div>
+        </aside>
 
-      {/* ── Segmented Control (HIG: replaces top-of-card tabs) ── */}
-      <div style={{ marginBottom: 20 }}>
-        <SegmentedControl
-          tabs={[["dose", "💊 Dose"], ["caffeine", "☕ Caffeine"], ["preview", "👁 Preview"], ["settings", "⚙ Settings"]]}
-          active={tab}
-          onChange={setTab}
-        />
-      </div>
+        {/* ══ MAIN CONTENT ════════════════════════════════════════════════ */}
+        <main className="main">
 
-      {/* ── DOSE TAB ── */}
-      {tab === "dose" && (
-        <>
-          <Section title="Formulation">
-            <SelectRow label="Drug" value={dMed} onChange={setDMed}
-              options={[
-                ...MPH_MEDS.map(m => [m, m]),
-                ...AMP_MEDS.map(m => [m, m]),
-              ]} />
-            <SliderRow label="Dose" value={`${dAmt} mg`} min={5} max={100} step={5}
-              onChange={setDAmt} color={MED_CFG[dMed].color} last />
-          </Section>
-          <Section title="Timing">
-            <TimeRow label="Taken at" value={dTime} onChange={setDTime} />
-            <CheckRow label="Taken with food (delays absorption)" checked={dFood} onChange={setDFood} last />
-          </Section>
-          <PrimaryBtn onClick={addDose} color={C.blue}>Add Dose</PrimaryBtn>
-        </>
-      )}
+          {/* Mobile header */}
+          <div className="mobile-hdr">
+            <h1 className="mobile-title">PK Timeline</h1>
+            <div className="mobile-hdr-btns">
+              <button className="circle-btn glass" onClick={share}><ShareIcon /></button>
+              <button className="circle-btn glass" onClick={() => setModal("settings")}><GearIcon /></button>
+            </div>
+          </div>
 
-      {/* ── CAFFEINE TAB ── */}
-      {tab === "caffeine" && (
-        <>
-          <Section title="Drink">
-            <SelectRow label="Type" value={cAmt} onChange={v => setCAmt(+v)}
-              options={drinkOptions.map(([mg, l]) => [mg, l])} />
-            <TimeRow label="Time" value={cTime} onChange={setCTime} last />
-          </Section>
-          <Section
-            title="Your CYP1A2 metabolism"
-            footer={`Sleep threshold: ${Math.round(weight * 0.6)} mg (${weight} kg × 0.6 mg/kg · adenosine receptor model)`}
-          >
-            <SliderRow
-              label={caffHL <= 3.5 ? "Fast metabolizer" : caffHL <= 6 ? "Average metabolizer" : "Slow metabolizer"}
-              value={`t½ ${caffHL}h`} min={2} max={9} step={0.5}
-              onChange={setCaffHL} color={C.yellow} last />
-          </Section>
-          <PrimaryBtn onClick={() => setCaffs(p => [...p, { id: Date.now(), amount: cAmt, time: toH(cTime) }])} color={C.yellow}>
-            Add Caffeine
-          </PrimaryBtn>
-        </>
-      )}
-
-      {/* ── PREVIEW TAB ── */}
-      {tab === "preview" && (
-        <>
-          <Section
-            title="What-if booster preview"
-            footer="Explore how a hypothetical dose shifts your curve and sleep window — without committing it."
-          >
-            <Row label="Enable preview" last={!prvOn}>
-              <Toggle on={prvOn} onChange={setPrvOn} />
-            </Row>
-            {prvOn && (
-              <>
-                <SelectRow label="Drug" value={pMed} onChange={setPMed}
-                  options={medOptions} />
-                <SliderRow label="Dose" value={`${pAmt} mg`} min={5} max={60} step={5}
-                  onChange={setPAmt} color={MED_CFG[pMed].color} />
-                <TimeRow label="Time" value={pTime} onChange={setPTime} />
-                <CheckRow label="With food" checked={pFood} onChange={setPFood} last />
-              </>
+          {/* Chart hero */}
+          <div className="glass chart-wrap">
+            {!hasAny ? (
+              <div className="chart-empty">
+                <p className="chart-empty-hint">Add a dose to see the PK curve</p>
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={pts} margin={{ top: 16, right: 20, bottom: 4, left: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" vertical={false} />
+                  <XAxis dataKey="t" type="number" domain={[0, 24]}
+                    ticks={[0, 4, 8, 12, 16, 20, 24]}
+                    tickFormatter={v => `${v}:00`}
+                    tick={{ fontSize: 11, fill: "var(--c3)", fontFamily: "var(--font)" }}
+                    axisLine={{ stroke: "rgba(0,0,0,0.07)" }} tickLine={false} />
+                  <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`}
+                    tick={{ fontSize: 11, fill: "var(--c3)", fontFamily: "var(--font)" }}
+                    axisLine={false} tickLine={false} width={36} />
+                  <Tooltip content={<ChartTooltip />} />
+                  <ReferenceArea x1={settings.targetStart} x2={settings.targetEnd}
+                    fill="rgba(52,199,89,0.07)" stroke="rgba(52,199,89,0.20)"
+                    strokeDasharray="4 4" />
+                  <ReferenceLine x={settings.sleepTime}
+                    stroke="rgba(88,86,214,0.30)" strokeDasharray="4 3"
+                    label={{ value: "sleep", position: "insideTopRight",
+                      offset: 6, fontSize: 10, fill: "var(--c3)" }} />
+                  {doses.map(d => (
+                    <ReferenceLine key={d.id} x={d.time}
+                      stroke={MEDS[d.med]?.color} strokeOpacity={0.28} strokeDasharray="3 3" />
+                  ))}
+                  {caffs.map(c => (
+                    <ReferenceLine key={c.id} x={c.time}
+                      stroke="#ffd60a" strokeOpacity={0.28} strokeDasharray="3 3" />
+                  ))}
+                  {stats.hasMPH  && <Line type="monotone" dataKey="mph"  name="MPH"
+                    stroke="#0066cc" strokeWidth={2.5} dot={false} connectNulls />}
+                  {stats.hasAMP  && <Line type="monotone" dataKey="amp"  name="AMP"
+                    stroke="#ff6b35" strokeWidth={2.5} dot={false} connectNulls />}
+                  {stats.hasCaff && <Line type="monotone" dataKey="caff" name="Caffeine"
+                    stroke="#b8860b" strokeWidth={2.5} dot={false} connectNulls />}
+                  {compareOn && <Line type="monotone" dataKey="cmp" name="Compare"
+                    stroke="#30b0c7" strokeWidth={2} strokeDasharray="7 4"
+                    dot={false} connectNulls />}
+                </LineChart>
+              </ResponsiveContainer>
             )}
-          </Section>
-          {prvOn && (
-            <PrimaryBtn color={C.green} onClick={() => {
-              setDoses(p => [...p, { id: Date.now(), med: pMed, amount: pAmt, time: toH(pTime), food: pFood }]);
-              setPrvOn(false);
-            }}>
-              Commit as Real Dose
-            </PrimaryBtn>
+          </div>
+
+          {/* Stats row */}
+          <div className="stats-row">
+            <div className="glass-thin stat-card">
+              <div className="stat-label">Sleep clearance</div>
+              <div className="stat-value"
+                style={{ color: stats.sleepOk !== null && stats.sleepOk <= settings.sleepTime
+                  ? "var(--green)" : "var(--c1)" }}>
+                {stats.sleepOk !== null ? fmtH(stats.sleepOk) : hasAny ? ">24:00" : "—"}
+              </div>
+            </div>
+            <div className="glass-thin stat-card">
+              <div className="stat-label">Target window</div>
+              <div className="stat-value">{fmtH(settings.targetStart)} — {fmtH(settings.targetEnd)}</div>
+            </div>
+            {stats.hasMPH && (
+              <div className="glass-thin stat-card">
+                <div className="stat-label">MPH peak</div>
+                <div className="stat-value" style={{ color: "#0066cc" }}>{fmtH(stats.peakMPH.t)}</div>
+              </div>
+            )}
+            {stats.hasAMP && (
+              <div className="glass-thin stat-card">
+                <div className="stat-label">AMP peak</div>
+                <div className="stat-value" style={{ color: "#ff6b35" }}>{fmtH(stats.peakAMP.t)}</div>
+              </div>
+            )}
+            {stats.hasCaff && (
+              <div className="glass-thin stat-card">
+                <div className="stat-label">Caffeine peak</div>
+                <div className="stat-value" style={{ color: "#b8860b" }}>{fmtH(stats.peakCaff.t)}</div>
+              </div>
+            )}
+            <div className="glass-thin stat-card">
+              <div className="stat-label">Active doses</div>
+              <div className="stat-value">{doses.length + caffs.length}</div>
+            </div>
+          </div>
+
+          {/* Mobile dose list */}
+          {(doses.length > 0 || caffs.length > 0) && (
+            <div className="glass mobile-list">
+              {doses.map(d => (
+                <div key={d.id} className="sb-row">
+                  <span className="sb-dot" style={{ background: MEDS[d.med]?.color }} />
+                  <div className="sb-row-info">
+                    <span className="sb-row-name">{d.med}</span>
+                    <span className="sb-row-meta">{d.amount}mg · {fmtH(d.time)}{d.food ? " · food" : ""}</span>
+                  </div>
+                  <button className="sb-del"
+                    onClick={() => setDoses(p => p.filter(x => x.id !== d.id))}>×</button>
+                </div>
+              ))}
+              {caffs.map(c => (
+                <div key={c.id} className="sb-row">
+                  <span className="sb-dot" style={{ background: "#ffd60a" }} />
+                  <div className="sb-row-info">
+                    <span className="sb-row-name">Caffeine</span>
+                    <span className="sb-row-meta">{c.amount}mg · {fmtH(c.time)}{c.food ? " · food" : ""}</span>
+                  </div>
+                  <button className="sb-del"
+                    onClick={() => setCaffs(p => p.filter(x => x.id !== c.id))}>×</button>
+                </div>
+              ))}
+            </div>
           )}
-        </>
-      )}
 
-      {/* ── SETTINGS TAB ── */}
-      {tab === "settings" && (
-        <>
-          <Section title="Body">
-            <SliderRow label="Weight" value={`${weight} kg`} min={40} max={130}
-              onChange={setWeight} color={C.green} last />
-          </Section>
+          <p className="disclaimer">Not a medical device. Consult your prescriber before adjusting treatment.</p>
 
-          <Section title="Target window" footer="Shade the hours when you need coverage to see gaps in your curve.">
-            <Row label="Show target window" last={!tw.on}>
-              <Toggle on={tw.on} onChange={v => setTw(t => ({ ...t, on: v }))} />
-            </Row>
-            {tw.on && (
+        </main>
+      </div>
+
+      {/* ══ MOBILE FAB ══════════════════════════════════════════════════════ */}
+      <button className="fab" onClick={() => { setModal("add"); setMTab("dose"); }}
+        aria-label="Add dose">
+        <PlusIcon size={24} />
+      </button>
+
+      {/* ══ MOBILE MODAL ════════════════════════════════════════════════════ */}
+      {modal && (
+        <div className="modal-backdrop" onClick={() => setModal(null)}>
+          <div className="modal-sheet glass" onClick={e => e.stopPropagation()}>
+            <div className="modal-handle" />
+
+            {modal === "add" && (
               <>
-                <TimeRow label="Start" value={fmtH(tw.s)} onChange={e => setTw(t => ({ ...t, s: toH(e) }))} />
-                <TimeRow label="End"   value={fmtH(tw.e)} onChange={e => setTw(t => ({ ...t, e: toH(e) }))} last />
+                <div className="modal-seg">
+                  {["dose", "caffeine", "compare"].map(t => (
+                    <button key={t} className={`seg-btn${mTab === t ? " seg-active" : ""}`}
+                      onClick={() => setMTab(t)}>
+                      {t[0].toUpperCase() + t.slice(1)}
+                    </button>
+                  ))}
+                </div>
+
+                {mTab === "dose" && (
+                  <>
+                    <DoseForm value={newDose} onChange={setNewDose}
+                      onAdd={() => setDoses(d => [...d, { ...newDose, id: uid() }])}
+                      onCancel={() => setModal(null)} />
+                    {doses.length > 0 && (
+                      <button className="modal-clear-btn" onClick={() => setDoses([])}>
+                        Clear all doses
+                      </button>
+                    )}
+                  </>
+                )}
+
+                {mTab === "caffeine" && (
+                  <>
+                    <CaffForm value={newCaff} onChange={setNewCaff}
+                      onAdd={() => setCaffs(c => [...c, { ...newCaff, id: uid() }])}
+                      onCancel={() => setModal(null)} />
+                    {caffs.length > 0 && (
+                      <button className="modal-clear-btn" onClick={() => setCaffs([])}>
+                        Clear all caffeine
+                      </button>
+                    )}
+                  </>
+                )}
+
+                {mTab === "compare" && (
+                  <div className="inline-form">
+                    <label className="f-toggle">
+                      <input type="checkbox" checked={compareOn}
+                        onChange={e => setCompare(e.target.checked)} />
+                      <span>Enable comparison curve</span>
+                    </label>
+                    {compareOn && (
+                      <>
+                        <select className="f-select" value={cmp.med}
+                          onChange={e => setCmp(c => ({ ...c, med: e.target.value }))}>
+                          {Object.keys(MEDS).map(m => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                        <div className="f-row">
+                          <div className="f-field">
+                            <label className="f-label">mg</label>
+                            <input type="number" className="f-input" value={cmp.amount}
+                              min={1} max={200} step={1}
+                              onChange={e => setCmp(c => ({ ...c, amount: +e.target.value }))} />
+                          </div>
+                          <div className="f-field">
+                            <label className="f-label">time</label>
+                            <input type="number" className="f-input" value={cmp.time}
+                              min={0} max={23} step={0.5}
+                              onChange={e => setCmp(c => ({ ...c, time: +e.target.value }))} />
+                          </div>
+                        </div>
+                      </>
+                    )}
+                    <button className="f-btn-add" onClick={() => setModal(null)}>Done</button>
+                  </div>
+                )}
               </>
             )}
-          </Section>
 
-          <Section title="Formulation compare" footer="Overlay a second formulation independently normalized — compare timing and coverage shape.">
-            <Row label="Show comparison" last={!cmpOn}>
-              <Toggle on={cmpOn} onChange={setCmpOn} />
-            </Row>
-            {cmpOn && (
+            {modal === "settings" && (
               <>
-                <SelectRow label="Drug" value={cMed} onChange={setCMed} options={medOptions} />
-                <SliderRow label="Dose" value={`${cmpAmt} mg`} min={5} max={100} step={5}
-                  onChange={setCmpAmt} color={C.teal} />
-                <TimeRow label="Time" value={cmpTime} onChange={setCmpTime} />
-                <CheckRow label="With food" checked={cmpFood} onChange={setCmpFood} last />
+                <h2 className="modal-title">Settings</h2>
+                <SettingsForm settings={settings} onChange={setSettings} />
+                <button className="f-btn-add" onClick={() => setModal(null)}>Done</button>
               </>
             )}
-          </Section>
-
-          <Section>
-            <Row last destructive onPress={() => {
-              if (window.confirm("Clear all doses and caffeine?")) { setDoses([]); setCaffs([]); }
-            }}>
-              <span style={{ fontSize: 17, color: C.red, width: "100%", textAlign: "center" }}>Clear All Doses</span>
-            </Row>
-          </Section>
-        </>
+          </div>
+        </div>
       )}
-
-      {/* ── Dose log ── */}
-      {(doses.length > 0 || caffs.length > 0) && (
-        <Section title="Today's log" footer=" ">
-          {[...doses.map((d, i) => (
-            <Row key={d.id} last={i === doses.length - 1 && caffs.length === 0}>
-              <span style={{ width: 9, height: 9, borderRadius: "50%", background: MED_CFG[d.med].color, flexShrink: 0, marginRight: 4 }} />
-              <span style={{ fontSize: 15, flex: 1 }}>{d.med} {d.amount} mg</span>
-              {d.food && <span style={{ fontSize: 13, color: C.label3, marginRight: 6 }}>🍽</span>}
-              <span style={{ fontSize: 15, color: C.label2, marginRight: 8, fontVariantNumeric: "tabular-nums" }}>{fmtH(d.time)}</span>
-              <button onClick={() => setDoses(p => p.filter(x => x.id !== d.id))}
-                style={{ background: "none", border: "none", color: C.red, fontSize: 18, cursor: "pointer", minWidth: 36, minHeight: 36, padding: 0 }}>−</button>
-            </Row>
-          )), ...caffs.map((c, i) => (
-            <Row key={c.id} last={i === caffs.length - 1}>
-              <span style={{ fontSize: 15, marginRight: 4 }}>☕</span>
-              <span style={{ fontSize: 15, flex: 1 }}>{c.amount} mg caffeine</span>
-              <span style={{ fontSize: 15, color: C.label2, marginRight: 8, fontVariantNumeric: "tabular-nums" }}>{fmtH(c.time)}</span>
-              <button onClick={() => setCaffs(p => p.filter(x => x.id !== c.id))}
-                style={{ background: "none", border: "none", color: C.red, fontSize: 18, cursor: "pointer", minWidth: 36, minHeight: 36, padding: 0 }}>−</button>
-            </Row>
-          ))]}
-        </Section>
-      )}
-
-      <p style={{ textAlign: "center", color: C.label3, fontSize: 11, lineHeight: 1.6, marginTop: 8, paddingBottom: 8 }}>
-        MPH t½ 2.5h · d-AMP t½ 11h · Caffeine t½ adjustable<br />
-        Individual pharmacokinetics vary. Consult your prescriber.
-      </p>
-    </div>
+    </>
   );
 }
