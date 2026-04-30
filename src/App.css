@@ -4,22 +4,51 @@
 
 :root {
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
-  --c1: #1d1d1f;
-  --c2: #6e6e73;
-  --c3: #aeaeb2;
-  --accent: #0066cc;
-  --green:  #34c759;
-  --red:    #ff3b30;
+  --system-gray:  rgb(142, 142, 147);
+  --system-gray2: rgb(174, 174, 178);
+  --system-gray3: rgb(199, 199, 204);
+  --system-gray4: rgb(209, 209, 214);
+  --system-gray5: rgb(229, 229, 234);
+  --system-gray6: rgb(242, 242, 247);
 
-  --glass-bg:     rgba(255,255,255,0.72);
-  --glass-border: rgba(255,255,255,0.75);
-  --glass-shadow: 0 4px 24px rgba(0,0,0,0.08), 0 1px 4px rgba(0,0,0,0.04);
-  --glass-inner:  inset 0 1px 0 rgba(255,255,255,0.95);
-  --glass-blur:   blur(28px) saturate(200%);
+  --system-blue:   rgb(0, 136, 255);
+  --system-green:  rgb(52, 199, 89);
+  --system-yellow: rgb(255, 204, 0);
+  --system-orange: rgb(255, 141, 40);
+  --system-red:    rgb(255, 56, 60);
+  --system-teal:   rgb(0, 195, 208);
+  --system-cyan:   rgb(0, 192, 232);
+  --system-indigo: rgb(97, 85, 245);
+  --system-purple: rgb(203, 48, 224);
+  --system-pink:   rgb(255, 45, 85);
+  --system-brown:  rgb(172, 127, 94);
 
-  --r:  20px;
-  --rm: 12px;
-  --rs: 8px;
+  --c1: rgb(28, 28, 30);
+  --c2: var(--system-gray);
+  --c3: var(--system-gray2);
+  --accent: var(--system-blue);
+  --green:  var(--system-green);
+  --red:    var(--system-red);
+
+  --hairline: rgba(209, 209, 214, 0.9);
+  --panel-bg: rgba(255, 255, 255, 0.94);
+  --panel-bg-thin: rgba(255, 255, 255, 0.92);
+  --panel-shadow: 0 1px 2px rgba(0,0,0,0.06);
+
+  --chart-grid: var(--system-gray5);
+  --chart-axis: var(--system-gray4);
+  --chart-tick: var(--system-gray);
+  --chart-ref: rgba(97, 85, 245, 0.35);
+
+  --glass-bg:     var(--panel-bg);
+  --glass-border: var(--hairline);
+  --glass-shadow: var(--panel-shadow);
+  --glass-inner:  inset 0 1px 0 rgba(255,255,255,0.7);
+  --glass-blur:   blur(14px) saturate(140%);
+
+  --r:  16px;
+  --rm: 10px;
+  --rs: 6px;
   --ease:   cubic-bezier(0.4, 0, 0.2, 1);
   --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
@@ -28,7 +57,7 @@ html, body, #root { height: 100%; }
 
 body {
   font-family: var(--font);
-  background: #f2f2f7;
+  background: var(--system-gray6);
   color: var(--c1);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -38,12 +67,12 @@ body {
 
 .bg {
   position: fixed; inset: 0; z-index: 0; pointer-events: none;
-  background: linear-gradient(145deg, #f0f0f7 0%, #e8ecf8 40%, #f5ecf5 100%);
+  background: var(--system-gray6);
 }
 
 .blob {
   position: absolute; border-radius: 50%;
-  filter: blur(100px); pointer-events: none;
+  filter: blur(100px); pointer-events: none; display: none;
 }
 .b1 { width:600px; height:600px; top:-200px;  right:-100px;
   background: radial-gradient(circle, rgba(100,180,255,0.30) 0%, transparent 70%); }
@@ -69,9 +98,9 @@ body {
 .glass-thin {
   backdrop-filter: blur(20px) saturate(180%);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
-  background: rgba(255,255,255,0.65);
-  border: 1px solid rgba(255,255,255,0.70);
-  box-shadow: 0 2px 10px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.90);
+  background: var(--panel-bg-thin);
+  border: 1px solid var(--hairline);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
   border-radius: var(--rm);
 }
 
@@ -83,8 +112,8 @@ body {
   display: grid;
   grid-template-columns: 272px 1fr;
   height: 100dvh;
-  padding: 12px;
-  gap: 12px;
+  padding: 14px;
+  gap: 14px;
 }
 
 /* ─── SIDEBAR ───────────────────────────────────────────────────────────── */
@@ -97,7 +126,7 @@ body {
 .sb-hdr {
   display: flex; align-items: flex-start; justify-content: space-between;
   padding: 20px 18px 14px;
-  border-bottom: 1px solid rgba(0,0,0,0.055);
+  border-bottom: 1px solid var(--hairline);
   flex-shrink: 0;
 }
 
@@ -114,12 +143,12 @@ body {
 
 .icon-btn {
   width: 30px; height: 30px; border: none;
-  background: rgba(0,0,0,0.04); border-radius: 50%;
+  background: rgba(0,0,0,0.03); border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; color: var(--c2);
   transition: background 0.15s var(--ease), color 0.15s var(--ease);
 }
-.icon-btn:hover { background: rgba(0,0,0,0.09); color: var(--c1); }
+.icon-btn:hover { background: rgba(0,0,0,0.07); color: var(--c1); }
 
 .sb-body {
   flex: 1; overflow-y: auto; padding: 6px 0 20px;
@@ -130,7 +159,7 @@ body {
 /* Sections */
 .sb-section {
   padding: 12px 18px;
-  border-bottom: 1px solid rgba(0,0,0,0.04);
+  border-bottom: 1px solid var(--hairline);
 }
 .sb-section:last-child { border-bottom: none; }
 
@@ -166,6 +195,7 @@ body {
   transition: background 0.12s var(--ease);
 }
 .sb-row:hover { background: rgba(0,0,0,0.03); }
+.sb-row-selected { background: rgba(0,0,0,0.04); }
 
 .sb-dot {
   width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
@@ -331,13 +361,20 @@ body {
 /* Chart — fills all available vertical space */
 .chart-wrap {
   flex: 1; min-height: 0;
-  padding: 20px 16px 14px 8px;
+  padding: 16px 14px 12px 10px;
   overflow: hidden;
+  position: relative;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .chart-empty {
-  height: 100%; display: flex;
-  align-items: center; justify-content: center;
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  pointer-events: none;
 }
 .chart-empty-hint { font-size: 15px; color: var(--c3); letter-spacing: -0.2px; }
 
@@ -346,9 +383,31 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
   gap: 10px; flex-shrink: 0;
+  padding: 2px 0;
 }
 
-.stat-card { padding: 12px 14px; }
+.stat-card {
+  padding: 8px 4px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.dose-card { grid-column: span 2; }
+.dose-title {
+  font-size: 15px; font-weight: 600;
+  letter-spacing: -0.2px; line-height: 1.1;
+}
+.dose-meta {
+  font-size: 12px; color: var(--c2);
+  letter-spacing: -0.1px; margin-top: 3px;
+}
+.dose-empty {
+  font-size: 12px; color: var(--c3);
+  letter-spacing: -0.1px;
+}
 
 .stat-label {
   font-size: 10px; font-weight: 600;
@@ -373,18 +432,18 @@ body {
 /* ─── CHART TOOLTIP ─────────────────────────────────────────────────────── */
 
 .tooltip {
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  background: rgba(255,255,255,0.90);
-  border: 1px solid rgba(255,255,255,0.70);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  background: rgba(255,255,255,0.96);
+  border: 1px solid var(--hairline);
   border-radius: var(--rm);
-  box-shadow: 0 4px 16px rgba(0,0,0,0.10);
-  padding: 10px 13px;
-  font-family: var(--font); font-size: 12px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  padding: 8px 11px;
+  font-family: var(--font); font-size: 11px;
 }
 
 .tooltip-time {
-  font-weight: 600; color: var(--c2); font-size: 10px;
+  font-weight: 600; color: var(--c2); font-size: 9px;
   text-transform: uppercase; letter-spacing: 0.3px; margin-bottom: 7px;
 }
 

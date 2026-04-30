@@ -52,17 +52,17 @@ function pkCaff(t, dose, hl, fd = 0) {
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 
 const MEDS = {
-  "Ritalin IR":   { color: "#0066cc", type: "mph" },
-  "Ritalin LA":   { color: "#32ade6", type: "mph" },
-  "Medikinet CR": { color: "#30b0c7", type: "mph" },
-  "Concerta":     { color: "#5856d6", type: "mph" },
-  "Adderall IR":  { color: "#ff6b35", type: "amp" },
-  "Adderall XR":  { color: "#ff9f0a", type: "amp" },
-  "Vyvanse":      { color: "#af52de", type: "amp" },
-  "Elvanse":      { color: "#bf5af2", type: "amp" },
+  "Ritalin IR":   { color: "#0088ff", type: "mph" },
+  "Ritalin LA":   { color: "#00c0e8", type: "mph" },
+  "Medikinet CR": { color: "#00c3d0", type: "mph" },
+  "Concerta":     { color: "#6155f5", type: "mph" },
+  "Adderall IR":  { color: "#ff8d28", type: "amp" },
+  "Adderall XR":  { color: "#ffcc00", type: "amp" },
+  "Vyvanse":      { color: "#cb30e0", type: "amp" },
+  "Elvanse":      { color: "#ff2d55", type: "amp" },
 };
 
-const CAFF_COLOR = "#b8860b";
+const CAFF_COLOR = "#ac7f5e";
 let _uid = 1;
 const uid = () => _uid++;
 
@@ -238,6 +238,7 @@ export default function App() {
   const [adding, setAdding]   = useState(null); // null | 'dose' | 'caff'
   const [newDose, setNewDose] = useState({ med: "Ritalin IR", amount: 10, time: 8, food: false });
   const [newCaff, setNewCaff] = useState({ amount: 100, time: 8, food: false });
+  const [selectedDoseId, setSelectedDoseId] = useState(null);
 
   const [modal, setModal] = useState(null);   // null | 'add' | 'settings'
   const [mTab, setMTab]   = useState("dose");
@@ -256,6 +257,16 @@ export default function App() {
       }
     } catch {}
   }, []);
+
+  useEffect(() => {
+    if (doses.length === 0) {
+      setSelectedDoseId(null);
+      return;
+    }
+    if (!selectedDoseId || !doses.some(d => d.id === selectedDoseId)) {
+      setSelectedDoseId(doses[doses.length - 1].id);
+    }
+  }, [doses, selectedDoseId]);
 
   useEffect(() => {
     try {
@@ -283,14 +294,32 @@ export default function App() {
   };
 
   // ── Chart ─────────────────────────────────────────────────────────────────────
-  const { pts, stats } = useMemo(() => {
+  const { pts, stats, meds } = useMemo(() => {
+    const activeMeds = Array.from(new Set(doses.map(d => d.med)));
+    const firstDoseByMed = activeMeds.reduce((acc, med) => {
+      acc[med] = Math.min(...doses.filter(d => d.med === med).map(d => d.time));
+      return acc;
+    }, {});
+    const firstCaffTime = caffs.length > 0 ? Math.min(...caffs.map(c => c.time)) : null;
     const raw = [];
     for (let t = 0; t <= 24; t += 0.1) {
       let mph = 0, amp = 0, caff = 0, cmpV = 0;
+      const medVals = {};
+      for (const med of activeMeds) medVals[med] = 0;
       for (const d of doses) {
-        const fd = d.food ? (MEDS[d.med]?.type === "amp" ? 1.0 : 0.75) : 0;
-        if (MEDS[d.med]?.type === "mph") mph  += pkMPH(t - d.time, d.amount, d.med, fd);
-        if (MEDS[d.med]?.type === "amp") amp  += pkAMP(t - d.time, d.amount, d.med, fd);
+        const cfg = MEDS[d.med];
+        if (!cfg) continue;
+        const fd = d.food ? (cfg.type === "amp" ? 1.0 : 0.75) : 0;
+        if (cfg.type === "mph") {
+          const val = pkMPH(t - d.time, d.amount, d.med, fd);
+          mph += val;
+          medVals[d.med] += val;
+        }
+        if (cfg.type === "amp") {
+          const val = pkAMP(t - d.time, d.amount, d.med, fd);
+          amp += val;
+          medVals[d.med] += val;
+        }
       }
       for (const c of caffs) caff += pkCaff(t - c.time, c.amount, settings.caffHL, c.food ? 0.5 : 0);
       if (compareOn) {
@@ -298,13 +327,17 @@ export default function App() {
         if (cfg?.type === "mph") cmpV = pkMPH(t - cmp.time, cmp.amount, cmp.med, 0);
         if (cfg?.type === "amp") cmpV = pkAMP(t - cmp.time, cmp.amount, cmp.med, 0);
       }
-      raw.push({ t: +t.toFixed(1), mph, amp, caff, cmp: cmpV });
+      raw.push({ t: +t.toFixed(1), mph, amp, caff, cmp: cmpV, ...medVals });
     }
 
     const pMPH  = Math.max(...raw.map(p => p.mph),  0.001);
     const pAMP  = Math.max(...raw.map(p => p.amp),  0.001);
     const pCaff = Math.max(...raw.map(p => p.caff), 0.001);
     const pCmp  = Math.max(...raw.map(p => p.cmp),  0.001);
+    const medPeaks = activeMeds.reduce((acc, med) => {
+      acc[med] = Math.max(...raw.map(p => p[med] || 0), 0.001);
+      return acc;
+    }, {});
 
     const hasMPH  = doses.some(d => MEDS[d.med]?.type === "mph");
     const hasAMP  = doses.some(d => MEDS[d.med]?.type === "amp");
@@ -325,19 +358,29 @@ export default function App() {
     return {
       pts: raw.map(p => ({
         t:    p.t,
-        mph:  +(p.mph  / pMPH  * 100).toFixed(1),
-        amp:  +(p.amp  / pAMP  * 100).toFixed(1),
-        caff: +(p.caff / pCaff * 100).toFixed(1),
-        cmp:  compareOn ? +(p.cmp / pCmp * 100).toFixed(1) : undefined,
+        ...activeMeds.reduce((acc, med) => {
+          acc[med] = p.t < firstDoseByMed[med]
+            ? null
+            : +(p[med] / medPeaks[med] * 100).toFixed(1);
+          return acc;
+        }, {}),
+        caff: firstCaffTime !== null && p.t < firstCaffTime
+          ? null
+          : +(p.caff / pCaff * 100).toFixed(1),
+        cmp:  compareOn
+          ? (p.t < cmp.time ? null : +(p.cmp / pCmp * 100).toFixed(1))
+          : undefined,
       })),
       stats: {
         sleepOk, hasMPH, hasAMP, hasCaff,
         peakMPH: maxBy("mph"), peakAMP: maxBy("amp"), peakCaff: maxBy("caff"),
       },
+      meds: activeMeds,
     };
   }, [doses, caffs, settings, compareOn, cmp]);
 
   const hasAny = stats.hasMPH || stats.hasAMP || stats.hasCaff;
+  const selectedDose = doses.find(d => d.id === selectedDoseId) || null;
 
   const addDose = () => { setDoses(d => [...d, { ...newDose, id: uid() }]); setAdding(null); };
   const addCaff = () => { setCaffs(c => [...c, { ...newCaff, id: uid() }]); setAdding(null); };
@@ -398,14 +441,17 @@ export default function App() {
                 <p className="sb-empty">No doses — tap + to add</p>
               )}
               {doses.map(d => (
-                <div key={d.id} className="sb-row">
+                <div key={d.id}
+                  className={`sb-row${selectedDoseId === d.id ? " sb-row-selected" : ""}`}
+                  onClick={() => setSelectedDoseId(d.id)}>
                   <span className="sb-dot" style={{ background: MEDS[d.med]?.color }} />
                   <div className="sb-row-info">
                     <span className="sb-row-name">{d.med}</span>
                     <span className="sb-row-meta">{d.amount}mg · {fmtH(d.time)}{d.food ? " · food" : ""}</span>
                   </div>
                   <button className="sb-del"
-                    onClick={() => setDoses(p => p.filter(x => x.id !== d.id))}>×</button>
+                    onClick={e => { e.stopPropagation(); setDoses(p => p.filter(x => x.id !== d.id)); }}
+                    >×</button>
                 </div>
               ))}
             </div>
@@ -428,7 +474,7 @@ export default function App() {
               )}
               {caffs.map(c => (
                 <div key={c.id} className="sb-row">
-                  <span className="sb-dot" style={{ background: "#ffd60a" }} />
+                  <span className="sb-dot" style={{ background: CAFF_COLOR }} />
                   <div className="sb-row-info">
                     <span className="sb-row-name">Caffeine</span>
                     <span className="sb-row-meta">{c.amount}mg · {fmtH(c.time)}{c.food ? " · food" : ""}</span>
@@ -489,7 +535,7 @@ export default function App() {
 
           {/* Mobile header */}
           <div className="mobile-hdr">
-            <h1 className="mobile-title">PK Timeline</h1>
+            <h1 className="mobile-title">Pharmacokinetics</h1>
             <div className="mobile-hdr-btns">
               <button className="circle-btn glass" onClick={share}><ShareIcon /></button>
               <button className="circle-btn glass" onClick={() => setModal("settings")}><GearIcon /></button>
@@ -498,49 +544,50 @@ export default function App() {
 
           {/* Chart hero */}
           <div className="glass chart-wrap">
-            {!hasAny ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={pts} margin={{ top: 12, right: 18, bottom: 4, left: 2 }}>
+                <CartesianGrid strokeDasharray="0" stroke="var(--chart-grid)" vertical={false} />
+                <XAxis dataKey="t" type="number" domain={[0, 24]}
+                  ticks={[0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24]}
+                  tickFormatter={v => `${v}:00`}
+                  tick={{ fontSize: 11, fill: "var(--chart-tick)", fontFamily: "var(--font)" }}
+                  axisLine={{ stroke: "var(--chart-axis)" }} tickLine={false} />
+                <YAxis domain={[0, 100]} ticks={[0, 20, 40, 60, 80, 100]} tickFormatter={v => `${v}%`}
+                  tick={{ fontSize: 11, fill: "var(--chart-tick)", fontFamily: "var(--font)" }}
+                  axisLine={false} tickLine={false} width={36} />
+                <Tooltip content={<ChartTooltip />} />
+                <ReferenceArea x1={settings.targetStart} x2={settings.targetEnd}
+                  fill="rgba(52, 199, 89, 0.08)" stroke="rgba(52, 199, 89, 0.22)"
+                  strokeDasharray="3 3" />
+                <ReferenceLine x={settings.sleepTime}
+                  stroke="var(--chart-ref)" strokeDasharray="3 3"
+                  label={{ value: "sleep", position: "insideTopRight",
+                    offset: 6, fontSize: 10, fill: "var(--chart-tick)" }} />
+                {doses.map(d => (
+                  <ReferenceLine key={d.id} x={d.time}
+                    stroke={MEDS[d.med]?.color} strokeOpacity={0.22} strokeDasharray="3 3" />
+                ))}
+                {caffs.map(c => (
+                  <ReferenceLine key={c.id} x={c.time}
+                    stroke={CAFF_COLOR} strokeOpacity={0.22} strokeDasharray="3 3" />
+                ))}
+                {meds.map(med => (
+                  <Line key={med} type="monotone" dataKey={med} name={med}
+                    stroke={MEDS[med]?.color} strokeWidth={2} dot={false} connectNulls={false} />
+                ))}
+                {stats.hasCaff && <Line type="monotone" dataKey="caff" name="Caffeine"
+                  stroke={CAFF_COLOR} strokeWidth={2} dot={false} connectNulls={false} />}
+                {compareOn && (
+                  <Line type="monotone" dataKey="cmp" name="Compare"
+                    stroke={MEDS[cmp.med]?.color || "var(--system-gray2)"} strokeWidth={1.5}
+                    strokeDasharray="6 4" dot={false} connectNulls={false} />
+                )}
+              </LineChart>
+            </ResponsiveContainer>
+            {!hasAny && (
               <div className="chart-empty">
                 <p className="chart-empty-hint">Add a dose to see the PK curve</p>
               </div>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={pts} margin={{ top: 16, right: 20, bottom: 4, left: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" vertical={false} />
-                  <XAxis dataKey="t" type="number" domain={[0, 24]}
-                    ticks={[0, 4, 8, 12, 16, 20, 24]}
-                    tickFormatter={v => `${v}:00`}
-                    tick={{ fontSize: 11, fill: "var(--c3)", fontFamily: "var(--font)" }}
-                    axisLine={{ stroke: "rgba(0,0,0,0.07)" }} tickLine={false} />
-                  <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`}
-                    tick={{ fontSize: 11, fill: "var(--c3)", fontFamily: "var(--font)" }}
-                    axisLine={false} tickLine={false} width={36} />
-                  <Tooltip content={<ChartTooltip />} />
-                  <ReferenceArea x1={settings.targetStart} x2={settings.targetEnd}
-                    fill="rgba(52,199,89,0.07)" stroke="rgba(52,199,89,0.20)"
-                    strokeDasharray="4 4" />
-                  <ReferenceLine x={settings.sleepTime}
-                    stroke="rgba(88,86,214,0.30)" strokeDasharray="4 3"
-                    label={{ value: "sleep", position: "insideTopRight",
-                      offset: 6, fontSize: 10, fill: "var(--c3)" }} />
-                  {doses.map(d => (
-                    <ReferenceLine key={d.id} x={d.time}
-                      stroke={MEDS[d.med]?.color} strokeOpacity={0.28} strokeDasharray="3 3" />
-                  ))}
-                  {caffs.map(c => (
-                    <ReferenceLine key={c.id} x={c.time}
-                      stroke="#ffd60a" strokeOpacity={0.28} strokeDasharray="3 3" />
-                  ))}
-                  {stats.hasMPH  && <Line type="monotone" dataKey="mph"  name="MPH"
-                    stroke="#0066cc" strokeWidth={2.5} dot={false} connectNulls />}
-                  {stats.hasAMP  && <Line type="monotone" dataKey="amp"  name="AMP"
-                    stroke="#ff6b35" strokeWidth={2.5} dot={false} connectNulls />}
-                  {stats.hasCaff && <Line type="monotone" dataKey="caff" name="Caffeine"
-                    stroke="#b8860b" strokeWidth={2.5} dot={false} connectNulls />}
-                  {compareOn && <Line type="monotone" dataKey="cmp" name="Compare"
-                    stroke="#30b0c7" strokeWidth={2} strokeDasharray="7 4"
-                    dot={false} connectNulls />}
-                </LineChart>
-              </ResponsiveContainer>
             )}
           </div>
 
@@ -558,22 +605,37 @@ export default function App() {
               <div className="stat-label">Target window</div>
               <div className="stat-value">{fmtH(settings.targetStart)} — {fmtH(settings.targetEnd)}</div>
             </div>
+            <div className="glass-thin stat-card dose-card">
+              <div className="stat-label">Selected dose</div>
+              {selectedDose ? (
+                <>
+                  <div className="dose-title" style={{ color: MEDS[selectedDose.med]?.color }}>
+                    {selectedDose.med}
+                  </div>
+                  <div className="dose-meta">
+                    {selectedDose.amount}mg · {fmtH(selectedDose.time)} · {selectedDose.food ? "with food" : "fasted"}
+                  </div>
+                </>
+              ) : (
+                <div className="dose-empty">No dose selected</div>
+              )}
+            </div>
             {stats.hasMPH && (
               <div className="glass-thin stat-card">
                 <div className="stat-label">MPH peak</div>
-                <div className="stat-value" style={{ color: "#0066cc" }}>{fmtH(stats.peakMPH.t)}</div>
+                <div className="stat-value" style={{ color: "var(--system-blue)" }}>{fmtH(stats.peakMPH.t)}</div>
               </div>
             )}
             {stats.hasAMP && (
               <div className="glass-thin stat-card">
                 <div className="stat-label">AMP peak</div>
-                <div className="stat-value" style={{ color: "#ff6b35" }}>{fmtH(stats.peakAMP.t)}</div>
+                <div className="stat-value" style={{ color: "var(--system-orange)" }}>{fmtH(stats.peakAMP.t)}</div>
               </div>
             )}
             {stats.hasCaff && (
               <div className="glass-thin stat-card">
                 <div className="stat-label">Caffeine peak</div>
-                <div className="stat-value" style={{ color: "#b8860b" }}>{fmtH(stats.peakCaff.t)}</div>
+                <div className="stat-value" style={{ color: CAFF_COLOR }}>{fmtH(stats.peakCaff.t)}</div>
               </div>
             )}
             <div className="glass-thin stat-card">
@@ -586,19 +648,22 @@ export default function App() {
           {(doses.length > 0 || caffs.length > 0) && (
             <div className="glass mobile-list">
               {doses.map(d => (
-                <div key={d.id} className="sb-row">
+                <div key={d.id}
+                  className={`sb-row${selectedDoseId === d.id ? " sb-row-selected" : ""}`}
+                  onClick={() => setSelectedDoseId(d.id)}>
                   <span className="sb-dot" style={{ background: MEDS[d.med]?.color }} />
                   <div className="sb-row-info">
                     <span className="sb-row-name">{d.med}</span>
                     <span className="sb-row-meta">{d.amount}mg · {fmtH(d.time)}{d.food ? " · food" : ""}</span>
                   </div>
                   <button className="sb-del"
-                    onClick={() => setDoses(p => p.filter(x => x.id !== d.id))}>×</button>
+                    onClick={e => { e.stopPropagation(); setDoses(p => p.filter(x => x.id !== d.id)); }}
+                    >×</button>
                 </div>
               ))}
               {caffs.map(c => (
                 <div key={c.id} className="sb-row">
-                  <span className="sb-dot" style={{ background: "#ffd60a" }} />
+                  <span className="sb-dot" style={{ background: CAFF_COLOR }} />
                   <div className="sb-row-info">
                     <span className="sb-row-name">Caffeine</span>
                     <span className="sb-row-meta">{c.amount}mg · {fmtH(c.time)}{c.food ? " · food" : ""}</span>
