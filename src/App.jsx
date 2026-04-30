@@ -479,7 +479,7 @@ export default function App() {
           {cmpOn   && <span style={{ color:"#38bdf8" }}>- - Compare</span>}
           {tw.on   && <span style={{ color:"#22c55e" }}>Target window</span>}
           {[...new Map(doses.map(d => [d.med, d])).values()].map(d => (
-            <span key={d.med} style={{ color: MED_CFG[d.med].color }}>▼ {d.med.split(" / ")[0].split(" ")[0]}</span>
+            <span key={d.med} style={{ color: MED_CFG[d.med].color }}>▼ {d.med}</span>
           ))}
           {cmpOn   && <span style={{ color:"#38bdf8" }}>▼ Compare</span>}
         </div>
