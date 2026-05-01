@@ -101,11 +101,11 @@ const PlusIcon = ({ size = 20 }) => (
 
 // ─── TOOLTIP ─────────────────────────────────────────────────────────────────
 
-function ChartTooltip({ active, payload, label }) {
+function ChartTooltip({ active, payload, label, xOffset }) {
   if (!active || !payload?.length) return null;
   return (
     <div className="tooltip">
-      <div className="tooltip-time">{fmtH(label)}</div>
+      <div className="tooltip-time">{fmtH(label + xOffset)}</div>
       {payload.filter(p => p.value > 0.5).map(p => (
         <div key={p.dataKey} className="tooltip-row">
           <span className="tooltip-dot" style={{ background: p.color }} />
@@ -294,7 +294,7 @@ export default function App() {
   };
 
   // ── Chart ─────────────────────────────────────────────────────────────────────
-  const { pts, stats, meds } = useMemo(() => {
+  const { pts, stats, meds, xOffset, xMax, xTicks } = useMemo(() => {
     const activeMeds = Array.from(new Set(doses.map(d => d.med)));
     const firstDoseByMed = activeMeds.reduce((acc, med) => {
       acc[med] = Math.min(...doses.filter(d => d.med === med).map(d => d.time));
@@ -355,9 +355,22 @@ export default function App() {
 
     const maxBy = key => raw.reduce((best, p) => p[key] > best[key] ? p : best, raw[0]);
 
+    const times = [
+      settings.targetStart,
+      ...doses.map(d => d.time),
+      ...caffs.map(c => c.time),
+      ...(compareOn ? [cmp.time] : []),
+    ];
+    const earliest = Math.min(...times);
+    const xOffset = Math.max(0, earliest);
+    const xMax = Math.max(0, 24 - xOffset);
+    const xTicks = [];
+    for (let t = 0; t <= xMax + 0.001; t += 2) xTicks.push(t);
+
     return {
       pts: raw.map(p => ({
         t:    p.t,
+        tRel: +(p.t - xOffset).toFixed(1),
         ...activeMeds.reduce((acc, med) => {
           acc[med] = p.t < firstDoseByMed[med]
             ? null
@@ -376,6 +389,9 @@ export default function App() {
         peakMPH: maxBy("mph"), peakAMP: maxBy("amp"), peakCaff: maxBy("caff"),
       },
       meds: activeMeds,
+      xOffset,
+      xMax,
+      xTicks,
     };
   }, [doses, caffs, settings, compareOn, cmp]);
 
@@ -547,28 +563,28 @@ export default function App() {
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={pts} margin={{ top: 12, right: 18, bottom: 4, left: 2 }}>
                 <CartesianGrid strokeDasharray="0" stroke="var(--chart-grid)" vertical={false} />
-                <XAxis dataKey="t" type="number" domain={[0, 24]}
-                  ticks={[0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24]}
-                  tickFormatter={v => `${v}:00`}
+                <XAxis dataKey="tRel" type="number" domain={[0, xMax]}
+                  ticks={xTicks}
+                  tickFormatter={v => fmtH(v + xOffset)}
                   tick={{ fontSize: 11, fill: "var(--chart-tick)", fontFamily: "var(--font)" }}
                   axisLine={{ stroke: "var(--chart-axis)" }} tickLine={false} />
                 <YAxis domain={[0, 100]} ticks={[0, 20, 40, 60, 80, 100]} tickFormatter={v => `${v}%`}
                   tick={{ fontSize: 11, fill: "var(--chart-tick)", fontFamily: "var(--font)" }}
                   axisLine={false} tickLine={false} width={36} />
-                <Tooltip content={<ChartTooltip />} />
-                <ReferenceArea x1={settings.targetStart} x2={settings.targetEnd}
+                <Tooltip content={<ChartTooltip xOffset={xOffset} />} />
+                <ReferenceArea x1={settings.targetStart - xOffset} x2={settings.targetEnd - xOffset}
                   fill="rgba(52, 199, 89, 0.08)" stroke="rgba(52, 199, 89, 0.22)"
                   strokeDasharray="3 3" />
-                <ReferenceLine x={settings.sleepTime}
+                <ReferenceLine x={settings.sleepTime - xOffset}
                   stroke="var(--chart-ref)" strokeDasharray="3 3"
                   label={{ value: "sleep", position: "insideTopRight",
                     offset: 6, fontSize: 10, fill: "var(--chart-tick)" }} />
                 {doses.map(d => (
-                  <ReferenceLine key={d.id} x={d.time}
+                  <ReferenceLine key={d.id} x={d.time - xOffset}
                     stroke={MEDS[d.med]?.color} strokeOpacity={0.22} strokeDasharray="3 3" />
                 ))}
                 {caffs.map(c => (
-                  <ReferenceLine key={c.id} x={c.time}
+                  <ReferenceLine key={c.id} x={c.time - xOffset}
                     stroke={CAFF_COLOR} strokeOpacity={0.22} strokeDasharray="3 3" />
                 ))}
                 {meds.map(med => (
