@@ -351,7 +351,7 @@ export default function App() {
       {/* Header */}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
         <div>
-          <h1 style={{margin:0,fontSize:mobile?17:20,fontWeight:700}}>ADHD Medication Timeline</h1>
+          <h1 style={{margin:0,fontSize:mobile?17:20,fontWeight:700}}>Pharmacokinetics</h1>
           <p style={{margin:"3px 0 0",fontSize:11,color:"#475569"}}>Estimated plasma curves · Published PK models · Not medical advice</p>
         </div>
         <button onClick={shareURL} style={{background:copied?"#059669":"#1e293b",border:"1px solid #334155",borderRadius:8,color:copied?"#fff":"#94a3b8",padding:"8px 12px",fontSize:12,cursor:"pointer",flexShrink:0,marginLeft:8,minHeight:44,minWidth:80,transition:"background .2s,color .2s"}}>
